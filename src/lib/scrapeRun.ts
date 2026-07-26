@@ -1,3 +1,4 @@
+import { after } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { getSettings } from "@/lib/settings";
 import { fetchScrapedLeads, getRunStatus, startGoogleMapsScrape, type StartScrapeParams } from "@/lib/apify";
@@ -74,10 +75,15 @@ export async function startCampaignScrape(params: StartCampaignParams) {
     },
   });
 
+  // `after()` (not a bare fire-and-forget `void` call) so this keeps running
+  // on Vercel once the response is sent — a plain unawaited promise gets cut
+  // off there as soon as the request completes, since serverless functions
+  // don't stay alive for background work the way a local `npm run dev`
+  // process does. Locally this behaves the same as before.
   if (useAutoGrid) {
-    void runAdaptiveGridScrape(run.id, params.searchQuery, params.location, maxLeads);
+    after(() => runAdaptiveGridScrape(run.id, params.searchQuery, params.location, maxLeads));
   } else {
-    void runLocationGrid(run.id, params.searchQuery, locations, maxLeads);
+    after(() => runLocationGrid(run.id, params.searchQuery, locations, maxLeads));
   }
 
   return run;
