@@ -1,0 +1,311 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+model Settings {
+  id          Int      @id @default(1)
+  userName    String?
+  userRole    String?
+  userCompany String?
+  userBio     String?
+  tonePreference String?
+
+  activeLlmProvider String? // "anthropic" | "openai"
+  anthropicApiKey   String? // encrypted
+  anthropicModel    String?
+  openaiApiKey      String? // encrypted
+  openaiModel       String?
+
+  googleServiceAccountJson String? // encrypted
+  googleSheetId            String?
+
+  globalScrapeLimit    Int @default(100)
+  globalSendLimit      Int @default(50)
+
+  // Per-account, per-sequence-stage daily send caps — an account can send
+  // up to this many cold emails AND up to this many follow-up-2s AND up to
+  // this many follow-up-3s on the same day (independent budgets, not a
+  // shared pool). SenderAccount can override any of these individually.
+  dailyCapCold      Int @default(20)
+  dailyCapFollowup2 Int @default(20)
+  dailyCapFollowup3 Int @default(20)
+
+  // Sends scheduled automatically (sending-campaign confirm, follow-up
+  // scheduling) are bumped to land inside this window — weekdays only,
+  // startHour (inclusive) to endHour (exclusive), in the given IANA zone.
+  // Manual "Send Now" is exempt (an explicit human decision).
+  businessHoursStartHour Int    @default(9)
+  businessHoursEndHour   Int    @default(17)
+  businessHoursTimezone  String @default("America/New_York")
+
+  // Default spacing before each follow-up, in days. followup2SpacingDays
+  // falls back to followupSpacingDays when unset. A per-lead override (any
+  // exact date/time) can replace this on the lead detail / Today's
+  // Sending pages without touching this global default.
+  followupSpacingDays  Int @default(3)
+  followup2SpacingDays Int?
+
+  // Persistent default instructions appended to every email-drafting system
+  // prompt; can be overridden per-batch at "write emails" time without
+  // being saved here.
+  emailSystemPromptOverride String?
+
+  // Randomized pause range (seconds) applied between sequential sends —
+  // first-email sends and follow-up sends use different ranges since
+  // follow-ups are lower-volume and pinned to a single sender.
+  firstSendPauseMinSeconds Int @default(5)
+  firstSendPauseMaxSeconds Int @default(120)
+  followupPauseMinSeconds  Int @default(5)
+  followupPauseMaxSeconds  Int @default(100)
+
+  // Local heuristic spam-risk gate applied before every send.
+  spamScoreThreshold Int    @default(70) // 0-100, higher = worse; >= this blocks/warns
+  spamScoreAction    String @default("block") // "block" | "warn"
+
+  updatedAt DateTime @updatedAt
+}
+
+model CampaignRun {
+  id          String   @id @default(cuid())
+  label       String
+  searchQuery String
+  location    String
+  maxLeads    Int
+  status      String   @default("pending") // pending|scraping|scraped|enriching|ready|sending|done|failed
+  apifyRunId  String?
+  createdAt   DateTime @default(now())
+
+  // What the sender specifically wants to pitch this batch of leads (e.g.
+  // "Voice AI receptionist" for a run of dental practices) — used at
+  // email-drafting time alongside the business summary and sender profile.
+  preferredService String @default("null")
+
+  // How many scraped results were skipped because they matched a Google
+  // Place ID already in the database from a prior run (e.g. re-running the
+  // same search/location) — shown on the run page so re-scrapes are
+  // transparent instead of silently shrinking the lead count.
+  duplicatesSkipped Int @default(0)
+
+  leads Lead[]
+}
+
+model Lead {
+  id            String      @id @default(cuid())
+  campaignRunId String
+  campaignRun   CampaignRun @relation(fields: [campaignRunId], references: [id])
+
+  // Google's stable per-business identifier, when the scraper provides one
+  // — the real cross-run dedup key (unlike name/address, which can vary
+  // slightly between scrapes of the same business).
+  googlePlaceId String? @unique
+
+  businessName String
+  website      String  @default("null")
+  category     String  @default("null") // business type/category from Google Maps, e.g. "Marketing agency"
+  scrapedEmail String  @default("null")
+  primaryEmail String  @default("null")
+  phone        String  @default("null")
+  address      String  @default("null")
+  linkedinUrl  String  @default("null")
+  aboutSummary String  @default("null")
+
+  // "standard" = has a website, goes through the AI-automation fit pipeline.
+  // "no_website" = no website found; skips fit-scoring and gets a separate
+  // website-development pitch instead of being dropped from the run.
+  leadType String @default("standard")
+
+  // Fit signals for the AI-automation offer, judged by the LLM alongside
+  // the About Summary. Not applicable (stay at defaults) for no_website leads.
+  fitScore           Int     @default(-1) // 0-100 from the LLM; -1 = not yet scored
+  fitVerdict         String  @default("unknown") // "good_fit" | "poor_fit" | "unknown" (derived from fitScore)
+  fitReason          String  @default("null")
+  teamSizeEstimate    String  @default("null")
+  hasManualWorkflows  Boolean @default(false)
+  hasAiOrTechStaff    Boolean @default(false)
+
+  enrichmentStatus String  @default("pending") // pending|crawling|summarizing|done|failed|unreachable
+  enrichmentError  String?
+
+  // Local, free deliverability check (syntax + MX record lookup) run right
+  // after an email is discovered during enrichment — catches typos/dead
+  // domains before a send is ever attempted. "unverified" = DNS lookup
+  // failed transiently (not treated as a hard block); "invalid" excludes
+  // the lead from the qualified filter and blocks sending outright.
+  emailVerificationStatus String @default("unverified") // "valid" | "invalid" | "unverified"
+
+  // Set when a Gmail bounce notification is detected for this lead's
+  // address — hard-stops all further sends/follow-ups, same as a reply.
+  bounced Boolean @default(false)
+
+  replyStatus String @default("No") // "Yes" | "No"
+
+  sheetRowNumber Int?
+  sheetRowSynced Boolean @default(false)
+
+  // Optional manual override for exactly when this lead's follow-up 2/3
+  // should go out (any specific date/time, not just "N hours after"). Read
+  // once when that follow-up is scheduled, then left as-is — blank means
+  // fall back to Settings.followupSpacingHours / followup2SpacingHours.
+  followup2ScheduledFor DateTime?
+  followup3ScheduledFor DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  emailDrafts EmailDraft[]
+  emailSends  EmailSend[]
+  sendingCampaignLeads SendingCampaignLead[]
+}
+
+model EmailDraft {
+  id      String @id @default(cuid())
+  leadId  String
+  lead    Lead   @relation(fields: [leadId], references: [id])
+  sequence Int   // 1, 2, 3
+  purpose String // "cold" | "followup1" | "followup2"
+  subject String
+  body    String
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  send EmailSend?
+
+  @@unique([leadId, sequence])
+}
+
+model EmailSend {
+  id     String @id @default(cuid())
+  leadId String
+  lead   Lead   @relation(fields: [leadId], references: [id])
+
+  emailDraftId String     @unique
+  emailDraft   EmailDraft @relation(fields: [emailDraftId], references: [id])
+
+  senderAccountId String?
+  senderAccount   SenderAccount? @relation(fields: [senderAccountId], references: [id])
+
+  sequence     Int
+  status       String    @default("scheduled") // scheduled|sent|failed|skipped_reply|cancelled
+  scheduledFor DateTime
+  sentAt       DateTime?
+
+  gmailMessageId String?
+  gmailThreadId  String?
+  errorMessage   String?
+
+  // Snapshot of the local spam-heuristic check at send time, for audit and
+  // the Summary tab's per-sender rollup.
+  spamCheckScore Int?
+  spamCheckFlags String? // JSON-stringified string[]
+
+  // True when this send was fired by an explicit "Send Now" click rather
+  // than the paced batch dispatcher — surfaced as a distinct badge so it's
+  // visually obvious which items "Start Sending" will (correctly) skip,
+  // since it only ever touches rows still in "scheduled" status.
+  sentManually Boolean @default(false)
+
+  createdAt DateTime @default(now())
+}
+
+model SenderAccount {
+  id           String    @id @default(cuid())
+  emailAddress String    @unique
+  refreshToken String // encrypted
+  accessToken  String? // encrypted, short-lived cache
+  tokenExpiry  DateTime?
+  // Per-sequence-stage overrides — null falls back to the matching
+  // Settings.dailyCapCold/Followup2/Followup3 default.
+  dailyCapCold      Int?
+  dailyCapFollowup2 Int?
+  dailyCapFollowup3 Int?
+  isActive     Boolean   @default(true)
+  createdAt    DateTime  @default(now())
+
+  // Cached rolling reputation score (0-100, higher = worse), a local
+  // approximation blended from recent content spam-scores + failure rate —
+  // not real inbox-placement data. Recomputed after each send attempt and
+  // lazily refreshed if stale when the Summary tab loads.
+  spamScore          Int       @default(0)
+  spamScoreUpdatedAt DateTime?
+
+  emailSends   EmailSend[]
+  sendCounters DailySendCounter[]
+  sendingCampaignLeads SendingCampaignLead[]
+}
+
+// One Apify account (free-tier or otherwise) usable for Google Maps
+// scraping. Multiple accounts let a scrape rotate to the next one once the
+// current one is exhausted (either our own bookkeeping counter crossing
+// monthlyLimit, or a real quota-exceeded error from Apify), instead of the
+// whole scrape stopping there.
+model ApifyAccount {
+  id           String   @id @default(cuid())
+  token        String   // encrypted
+  label        String?
+  leadsScraped Int      @default(0)
+  monthlyLimit Int      @default(1000)
+  isActive     Boolean  @default(true)
+  createdAt    DateTime @default(now())
+}
+
+// A batch of leads drawn from the global "fresh qualified" pool for a
+// deliberate sending push — separate from CampaignRun, which represents a
+// *scrape* batch. Created in "draft" status for preview/editing, then
+// "confirmed" once the user reviews every email and locks in sending;
+// EmailSend rows for sequence 1 are only ever created at confirm time.
+model SendingCampaign {
+  id          String   @id @default(cuid())
+  label       String
+  targetCount Int
+  status      String   @default("draft") // draft | confirmed | done | cancelled
+  createdAt   DateTime @default(now())
+  confirmedAt DateTime?
+
+  leads SendingCampaignLead[]
+}
+
+// One lead's membership in a SendingCampaign, with the sender account
+// assigned up front (round-robin at campaign creation) and locked in for
+// that lead's whole 3-email sequence — never reassigned later, so the
+// thread stays consistent from one real inbox.
+model SendingCampaignLead {
+  id                String   @id @default(cuid())
+  sendingCampaignId String
+  sendingCampaign   SendingCampaign @relation(fields: [sendingCampaignId], references: [id])
+  leadId            String
+  lead              Lead     @relation(fields: [leadId], references: [id])
+  senderAccountId   String
+  senderAccount     SenderAccount @relation(fields: [senderAccountId], references: [id])
+  createdAt         DateTime @default(now())
+
+  @@unique([sendingCampaignId, leadId])
+}
+
+model DailySendCounter {
+  id              String        @id @default(cuid())
+  senderAccountId String
+  senderAccount   SenderAccount @relation(fields: [senderAccountId], references: [id])
+  date            String // "YYYY-MM-DD" local date key
+  sequence        Int           // 1 (cold), 2, or 3 — independent budget per stage
+  count           Int           @default(0)
+
+  @@unique([senderAccountId, date, sequence])
+}
+
+model JobRun {
+  id      String   @id @default(cuid())
+  jobType String // "followup" | "replyCheck"
+  refId   String?
+  status  String // "success" | "failed"
+  runAt   DateTime @default(now())
+  message String?
+}

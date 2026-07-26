@@ -1,0 +1,259 @@
+"use client";
+
+import { useState } from "react";
+import { useRouter } from "next/navigation";
+import { btnPrimary, btnSecondary, btnGhost, card, badgeClass } from "@/lib/ui";
+
+interface Draft {
+  id: string;
+  sequence: number;
+  subject: string;
+  body: string;
+}
+
+export interface CampaignLead {
+  campaignLeadId: string;
+  leadId: string;
+  businessName: string;
+  primaryEmail: string;
+  aboutSummary: string | null;
+  senderEmail: string;
+  drafts: Draft[];
+}
+
+const SEQUENCE_LABEL: Record<number, string> = { 1: "Cold email", 2: "Follow-up 2", 3: "Follow-up 3" };
+
+interface DraftEdit {
+  subject: string;
+  body: string;
+}
+
+export function SendingCampaignView({
+  campaignId,
+  status,
+  initialLeads,
+}: {
+  campaignId: string;
+  status: string;
+  initialLeads: CampaignLead[];
+}) {
+  const router = useRouter();
+  const [leads] = useState(initialLeads);
+  const [expanded, setExpanded] = useState<string | null>(null);
+  const [openSequence, setOpenSequence] = useState<Record<string, number>>({});
+  const [toEdits, setToEdits] = useState<Record<string, string>>({});
+  const [draftEdits, setDraftEdits] = useState<Record<string, DraftEdit>>({});
+  const [saving, setSaving] = useState<string | null>(null);
+  const [saveMessage, setSaveMessage] = useState<Record<string, string>>({});
+  const [confirming, setConfirming] = useState(false);
+  const [confirmMessage, setConfirmMessage] = useState<string | null>(null);
+
+  const isDraftStatus = status === "draft";
+
+  function currentTo(lead: CampaignLead): string {
+    return toEdits[lead.leadId] ?? lead.primaryEmail;
+  }
+  function currentDraft(draft: Draft): DraftEdit {
+    return draftEdits[draft.id] ?? { subject: draft.subject, body: draft.body };
+  }
+
+  async function handleSaveLead(lead: CampaignLead) {
+    setSaving(lead.leadId);
+    try {
+      const emailChanged = toEdits[lead.leadId] !== undefined && toEdits[lead.leadId] !== lead.primaryEmail;
+      const changedDrafts = lead.drafts.filter((d) => {
+        const edit = draftEdits[d.id];
+        return edit && (edit.subject !== d.subject || edit.body !== d.body);
+      });
+
+      const results = await Promise.all([
+        emailChanged
+          ? fetch(`/api/leads/${lead.leadId}`, {
+              method: "PUT",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ primaryEmail: toEdits[lead.leadId] }),
+            }).then((r) => r.json().then((data) => ({ ok: r.ok, data })))
+          : null,
+        ...changedDrafts.map((d) =>
+          fetch(`/api/drafts/${d.id}`, {
+            method: "PUT",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(draftEdits[d.id]),
+          }).then((r) => r.json().then((data) => ({ ok: r.ok, data })))
+        ),
+      ]);
+
+      const failed = results.find((r) => r && !r.ok);
+      if (failed) throw new Error(failed.data?.error ?? "Failed to save");
+
+      setSaveMessage((prev) => ({ ...prev, [lead.leadId]: "Saved." }));
+      router.refresh();
+    } catch (err) {
+      setSaveMessage((prev) => ({
+        ...prev,
+        [lead.leadId]: err instanceof Error ? `Error: ${err.message}` : "Failed to save",
+      }));
+    } finally {
+      setSaving(null);
+    }
+  }
+
+  async function handleConfirm() {
+    setConfirming(true);
+    setConfirmMessage(null);
+    try {
+      const res = await fetch(`/api/sending-campaigns/${campaignId}/confirm`, { method: "POST" });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error ?? "Failed to confirm");
+      setConfirmMessage(`Confirmed — ${data.scheduled} email${data.scheduled === 1 ? "" : "s"} scheduled.`);
+      router.refresh();
+    } catch (err) {
+      setConfirmMessage(err instanceof Error ? `Error: ${err.message}` : "Failed to confirm");
+    } finally {
+      setConfirming(false);
+    }
+  }
+
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center justify-between">
+        <p className="text-sm text-[var(--ink-soft)]">
+          {leads.length} lead{leads.length === 1 ? "" : "s"} in this campaign
+        </p>
+        {isDraftStatus ? (
+          <button onClick={handleConfirm} disabled={confirming} className={btnPrimary}>
+            {confirming ? "Confirming…" : "Confirm & Schedule"}
+          </button>
+        ) : (
+          <span className={badgeClass("green")}>{status}</span>
+        )}
+      </div>
+      {isDraftStatus && (
+        <p className="text-xs text-[var(--ink-soft)]">
+          Review and edit every email below. Nothing is scheduled until you click Confirm &
+          Schedule — sending then happens automatically within business hours, paced across your
+          connected accounts.
+        </p>
+      )}
+      {confirmMessage && <p className="text-sm text-[var(--ink-soft)]">{confirmMessage}</p>}
+
+      <div className="space-y-3">
+        {leads.map((lead) => {
+          const isOpen = expanded === lead.leadId;
+          const to = currentTo(lead);
+          const activeSequence = openSequence[lead.leadId] ?? 1;
+          const activeDraft = lead.drafts.find((d) => d.sequence === activeSequence);
+          const activeEdit = activeDraft ? currentDraft(activeDraft) : null;
+
+          return (
+            <div key={lead.leadId} className={card}>
+              <button
+                onClick={() => setExpanded(isOpen ? null : lead.leadId)}
+                className="flex w-full items-center justify-between text-left"
+              >
+                <div>
+                  <p className="font-medium text-[var(--ink)]">{lead.businessName}</p>
+                  <p className="text-sm text-[var(--ink-soft)]">{lead.primaryEmail}</p>
+                </div>
+                <span className="text-sm text-[var(--ink-soft)]">via {lead.senderEmail}</span>
+              </button>
+
+              {lead.aboutSummary && (
+                <p className="mt-2 text-sm text-[var(--ink-soft)]">{lead.aboutSummary}</p>
+              )}
+
+              {isOpen && (
+                <div className="mt-4 space-y-3 border-t border-[var(--border)] pt-4">
+                  <div className="space-y-1.5">
+                    <label className="text-xs font-medium uppercase tracking-wide text-[var(--ink-soft)]">
+                      To
+                    </label>
+                    <input
+                      value={to}
+                      onChange={(e) => setToEdits((prev) => ({ ...prev, [lead.leadId]: e.target.value }))}
+                      disabled={!isDraftStatus}
+                      className="w-full rounded-xl border border-[var(--border)] px-3.5 py-2.5 text-sm text-[var(--ink)] outline-none transition focus:border-[var(--brand)] focus:ring-2 focus:ring-[var(--brand-light)] disabled:bg-neutral-50"
+                    />
+                  </div>
+
+                  <div className="flex gap-2">
+                    {lead.drafts.map((d) => (
+                      <button
+                        key={d.id}
+                        type="button"
+                        onClick={() => setOpenSequence((prev) => ({ ...prev, [lead.leadId]: d.sequence }))}
+                        className={`rounded-full px-4 py-1.5 text-sm font-medium transition ${
+                          activeSequence === d.sequence
+                            ? "bg-[var(--brand)] text-white"
+                            : "border border-[var(--border)] text-[var(--ink-soft)] hover:bg-neutral-50"
+                        }`}
+                      >
+                        {SEQUENCE_LABEL[d.sequence] ?? `Sequence ${d.sequence}`}
+                      </button>
+                    ))}
+                  </div>
+
+                  {activeDraft && activeEdit && (
+                    <>
+                      <div className="space-y-1.5">
+                        <label className="text-xs font-medium uppercase tracking-wide text-[var(--ink-soft)]">
+                          Subject
+                        </label>
+                        <input
+                          value={activeEdit.subject}
+                          disabled={!isDraftStatus}
+                          onChange={(e) =>
+                            setDraftEdits((prev) => ({
+                              ...prev,
+                              [activeDraft.id]: { ...activeEdit, subject: e.target.value },
+                            }))
+                          }
+                          className="w-full rounded-xl border border-[var(--border)] px-3.5 py-2.5 text-sm text-[var(--ink)] outline-none transition focus:border-[var(--brand)] focus:ring-2 focus:ring-[var(--brand-light)] disabled:bg-neutral-50"
+                        />
+                      </div>
+                      <div className="space-y-1.5">
+                        <label className="text-xs font-medium uppercase tracking-wide text-[var(--ink-soft)]">
+                          Body
+                        </label>
+                        <textarea
+                          value={activeEdit.body}
+                          disabled={!isDraftStatus}
+                          onChange={(e) =>
+                            setDraftEdits((prev) => ({
+                              ...prev,
+                              [activeDraft.id]: { ...activeEdit, body: e.target.value },
+                            }))
+                          }
+                          rows={8}
+                          className="w-full rounded-xl border border-[var(--border)] px-3.5 py-2.5 font-mono text-sm text-[var(--ink)] outline-none transition focus:border-[var(--brand)] focus:ring-2 focus:ring-[var(--brand-light)] disabled:bg-neutral-50"
+                        />
+                      </div>
+                    </>
+                  )}
+
+                  {isDraftStatus && (
+                    <div className="flex items-center gap-2">
+                      <button
+                        onClick={() => handleSaveLead(lead)}
+                        disabled={saving === lead.leadId}
+                        className={btnSecondary}
+                      >
+                        {saving === lead.leadId ? "Saving…" : "Save"}
+                      </button>
+                      <button onClick={() => setExpanded(null)} className={btnGhost}>
+                        Close
+                      </button>
+                    </div>
+                  )}
+                  {saveMessage[lead.leadId] && (
+                    <p className="text-sm text-[var(--ink-soft)]">{saveMessage[lead.leadId]}</p>
+                  )}
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}

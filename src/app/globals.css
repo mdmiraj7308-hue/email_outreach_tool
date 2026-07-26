@@ -1,0 +1,52 @@
+@import "tailwindcss";
+
+:root {
+  --background: #ffffff;
+  --foreground: #14171a;
+
+  /* Brevo-style palette: bright mint green brand, near-white sidebar */
+  --brand: #17b26a;
+  --brand-dark: #0e9b5a;
+  --brand-light: #e3f8ec;
+  --ink: #14171a;
+  --ink-soft: #667085;
+  --border: #e9ebee;
+  --sidebar-bg: #fbfdfb;
+  --sidebar-border: #eef1ee;
+  --sidebar-active-bg: #d9f5e6;
+  --content-bg: #f7f8f7;
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-brand: var(--brand);
+  --color-brand-dark: var(--brand-dark);
+  --color-brand-light: var(--brand-light);
+  --font-sans: var(--font-poppins);
+  --font-mono: var(--font-geist-mono);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --background: #0b1220;
+    --foreground: #e8edf3;
+    --border: #223049;
+    --brand-light: #0f2e26;
+  }
+}
+
+body {
+  background: var(--content-bg);
+  color: var(--foreground);
+}
+
+/* Prevent the browser's autofill styling (e.g. name/email fields) from
+   overriding text color with a low-contrast tint. */
+input:-webkit-autofill,
+textarea:-webkit-autofill {
+  -webkit-text-fill-color: var(--ink);
+  -webkit-box-shadow: 0 0 0px 1000px #ffffff inset;
+  box-shadow: 0 0 0px 1000px #ffffff inset;
+  transition: background-color 9999s ease-in-out 0s;
+}

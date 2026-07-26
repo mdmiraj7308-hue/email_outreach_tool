@@ -1,0 +1,167 @@
+EMAIL OUTREACH TOOL — SYSTEM OVERVIEW
+======================================
+
+WHAT THIS IS
+------------
+A single-user tool that finds small local businesses on Google Maps,
+researches each one, writes a personalized 3-email cold outreach sequence
+(intro + 2 follow-ups) using AI the moment a lead qualifies, and — once you
+review and confirm a batch — sends those emails automatically from your own
+Gmail accounts, spread across US business hours.
+
+It's built for one person (you) pitching AI automation / web development
+services to local businesses. It can run entirely on your own machine, or be
+deployed to the cloud (Vercel + Supabase) with a private login gate — either
+way, it's a single-user tool with no public sign-up.
+
+
+WHAT IT DOES, STEP BY STEP
+---------------------------
+1. SCRAPE
+   You give it a business type + location + how many leads you want, and
+   choose how to cover the area: auto-split (the system figures out how
+   many non-overlapping map areas it needs to search to hit your target,
+   and digs deeper into any dense pocket), a manual list of specific
+   areas, or a single plain search. It pulls matching businesses from
+   Google Maps (name, website, phone, address, category), automatically
+   skipping anything already in your database and rotating between
+   multiple Apify accounts if one runs low or hits a real usage limit.
+
+2. ENRICH
+   For each lead with a website, it reads the site (falling back to a
+   real headless browser if the site actively blocks simple requests),
+   finds a published contact/founder email (checked in the page's
+   structured data too, never guessed), grabs a LinkedIn link if present,
+   writes an AI summary of the business, and scores how good a fit they
+   are for your offer (0-100). It also runs a free email deliverability
+   check at this stage (see below).
+
+3. AUTO-DRAFT
+   The moment a lead finishes enrichment and qualifies — a working email
+   plus a fit score of 50 or higher, not bounced or invalid — the AI
+   writes the cold email and both follow-ups automatically, using your
+   profile/bio. Nothing manual here; it's already been pushed to your
+   connected Google Sheet by the time you look at it.
+
+4. CREATE A SENDING CAMPAIGN
+   From the Sending Campaigns tab, you pull however many leads you want
+   from the pool of fresh, qualified, never-yet-contacted leads (hottest
+   fit score first). The system automatically and evenly splits those
+   leads across your connected Gmail accounts — whichever account gets a
+   given lead handles all 3 of that lead's emails, so a conversation
+   never switches senders mid-thread.
+
+5. REVIEW + CONFIRM
+   Before anything is scheduled, you can preview and edit every lead's
+   full 3-email sequence and recipient address. Nothing sends until you
+   click "Confirm & Schedule."
+
+6. AUTOMATIC SCHEDULING + SENDING
+   Once confirmed, sends are automatically spread across business-hours
+   weekdays so no single Gmail account ever exceeds its daily sending
+   limit, then dispatched one at a time with random pauses between each.
+
+7. FOLLOW UP AUTOMATICALLY
+   If a lead doesn't reply, follow-up 2 and follow-up 3 go out
+   automatically after a set number of days (also landing within business
+   hours) — unless they reply or the email bounces, in which case
+   everything for that lead stops.
+
+8. TRACK
+   A "Summary" tab shows totals across every campaign: leads scraped,
+   emails sent, follow-ups sent, replies received, and how each sending
+   account is performing.
+
+
+HOW WE KEEP IT SAFE / RELIABLE
+--------------------------------
+Scraped data and mass outreach both carry real risk — bad addresses, sending
+the same person twice, looking spammy, burning out your Gmail account, or
+missing most of a market because one search only shows ~120 results. Here's
+what's built in to guard against each of those:
+
+- COVERS A WHOLE AREA WITHOUT DOUBLE-SCRAPING
+  A single Google Maps search only ever returns about 120 results, no
+  matter how many businesses actually exist in that area. The system can
+  automatically split a big search into a grid of separate, non-overlapping
+  map areas (searching each one independently, and zooming further into any
+  area that looks unusually dense) to actually cover a whole city, while
+  still catching and discarding any business that shows up in more than one
+  area.
+
+- ROTATES ACROSS MULTIPLE SCRAPING ACCOUNTS
+  If you've added more than one Apify account, the system drains one
+  before moving to the next automatically. If an account hits a real usage
+  limit mid-scrape, that specific search area is retried on the next
+  account instead of the whole scrape failing.
+
+- STOPS DUPLICATE LEADS AT SCRAPE TIME
+  Every business from Google Maps has a unique ID. Before adding a new
+  lead, we check if that exact business is already in your database —
+  if so, it's skipped, not re-added.
+
+- STOPS DUPLICATE EMAILS AT SEND TIME
+  Separately from the above, right before any email goes out, the system
+  checks: "has this exact email address already been sent to, under a
+  different lead?" If yes, it's blocked.
+
+- CHECKS EMAILS ARE REAL BEFORE SENDING
+  Every discovered email is checked for correct formatting and a real,
+  working mail server behind its domain (free, automatic, no cost). Fake
+  or dead-domain emails are excluded from sending entirely.
+
+- WATCHES FOR BOUNCES
+  After sending, the system checks your Gmail inbox for delivery-failure
+  messages. If an email actually bounces, that lead is flagged and all
+  further follow-ups to them are cancelled automatically.
+
+- CHECKS EVERY EMAIL FOR "SPAMMY" WRITING
+  Right before sending, each email is scored for spam-trigger words,
+  ALL-CAPS, excessive punctuation, and too many links. Emails that score
+  too high are either blocked or flagged, based on your settings.
+
+- SEPARATE DAILY LIMITS PER EMAIL STAGE, PER ACCOUNT
+  Each Gmail account has its own daily limit for cold emails, a separate
+  one for 2nd follow-ups, and a separate one for 3rd follow-ups — so a
+  busy day of follow-ups never crowds out that day's new introductions,
+  or vice versa.
+
+- ONLY SENDS DURING BUSINESS HOURS
+  Automatically-scheduled emails (both first sends and follow-ups) only
+  go out on weekdays within a configurable window (9am-5pm Eastern by
+  default) — never overnight or on a weekend. An account that would go
+  over its daily limit on one day automatically rolls the extra leads to
+  the next available business day.
+
+- NEVER SENDS BACK-TO-BACK
+  A random pause happens between every single email sent — this isn't a
+  bulk blast, it's paced like a real person sending one email at a time.
+
+- KEEPS FOLLOW-UPS FROM THE SAME SENDER
+  If email #1 to a lead went out from Account A, follow-ups #2 and #3 to
+  that same lead always go from Account A too — decided up front when you
+  create the sending campaign, never switched mid-conversation.
+
+- STOPS THE MOMENT SOMEONE REPLIES
+  Any real reply on a thread immediately cancels that lead's remaining
+  follow-ups.
+
+None of this guarantees a perfect send rate — real inbox-level email
+verification (confirming a specific mailbox exists, not just that the
+domain has a mail server) would need a paid third-party service, which
+isn't connected by default. Everything above is the free, local layer of
+protection, and it catches the large majority of real-world risk from
+scraped-data outreach.
+
+
+RUNNING IT: LOCAL VS. DEPLOYED
+--------------------------------
+Locally, a background process checks for due sends/follow-ups/replies every
+so often while "npm run dev" is running — close it and that pauses until you
+start it again (nothing is lost, it just catches up).
+
+Deployed to Vercel, there's no always-on process, so an external scheduled
+job (hit once a minute, free via a service like cron-job.org) triggers the
+same checks instead. Either way, a private login screen (backed by
+Supabase, one account only, no public sign-up) sits in front of the whole
+app once deployed.
