@@ -83,6 +83,16 @@ model CampaignRun {
   apifyRunId  String?
   createdAt   DateTime @default(now())
 
+  // Persisted orchestration state so a multi-location/tile scrape can be
+  // advanced one small step per cron tick instead of one long-lived
+  // background loop — Vercel serverless functions can't reliably stay alive
+  // long enough (minutes) to poll Apify to completion in a single
+  // invocation. scrapeQueue is a JSON-serialized ScrapeState (remaining
+  // locations/tiles + metadata); scrapeAccountId is which ApifyAccount owns
+  // the currently in-flight apifyRunId, if any.
+  scrapeQueue     String?
+  scrapeAccountId String?
+
   // What the sender specifically wants to pitch this batch of leads (e.g.
   // "Voice AI receptionist" for a run of dental practices) — used at
   // email-drafting time alongside the business summary and sender profile.

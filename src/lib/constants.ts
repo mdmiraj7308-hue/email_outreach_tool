@@ -64,6 +64,7 @@ export const GOOGLE_SHEET_HEADERS = [
 export const FOLLOWUP_JOB_INTERVAL_MS = 60_000;
 export const REPLY_CHECK_JOB_INTERVAL_MS = 5 * 60_000;
 export const BOUNCE_CHECK_JOB_INTERVAL_MS = 5 * 60_000;
+export const SCRAPE_ADVANCE_JOB_INTERVAL_MS = 5_000;
 
 // Step-3 qualification filter: a lead must have a discovered email AND a
 // fit score at/above this to be eligible for batch drafting/sending.

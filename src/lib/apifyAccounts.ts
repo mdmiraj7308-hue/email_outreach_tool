@@ -59,6 +59,12 @@ export async function getAvailableApifyAccounts(
     .map(decryptAccount);
 }
 
+/** Fetches one specific account's decrypted token — used to resume checking an in-flight Apify run whose owning account was persisted on the CampaignRun row. */
+export async function getApifyAccountById(accountId: string): Promise<DecryptedApifyAccount | null> {
+  const row = await prisma.apifyAccount.findUnique({ where: { id: accountId } });
+  return row ? decryptAccount(row) : null;
+}
+
 export async function incrementLeadsScraped(accountId: string, count: number): Promise<void> {
   if (count <= 0) return;
   await prisma.apifyAccount.update({
