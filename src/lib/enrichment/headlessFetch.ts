@@ -1,4 +1,4 @@
-import { chromium, type Browser } from "playwright-core";
+import type { Browser } from "playwright-core";
 import path from "node:path";
 import { createRequire } from "node:module";
 import browsersRegistry from "./playwrightBrowsersRegistry.json";
@@ -7,17 +7,23 @@ const NAV_TIMEOUT_MS = 25_000;
 
 /**
  * On Vercel, playwright-core's own registry code does a runtime
- * `require(path.join(packageRoot, "browsers.json"))` the first time
- * chromium.launch() is called. That file reliably gets dropped from the
- * deployed function no matter what outputFileTracingIncludes/
- * serverExternalPackages combination is set in next.config.ts (confirmed
- * across multiple real cache-free deploys) — Next's static tracer never
- * reliably picks it up. Rather than fight the bundler further, we
- * short-circuit Node's own module resolution for that exact absolute path
- * and hand back a copy of the file's contents that we bundled ourselves as
- * a plain JSON import (which Next always includes, since it's a normal
- * static import from our own source rather than a dynamic path computed
- * inside a third-party package at runtime).
+ * `require(path.join(packageRoot, "browsers.json"))` — and it does this the
+ * moment the package itself is imported, not lazily at chromium.launch()
+ * time. That file reliably gets dropped from the deployed function no
+ * matter what outputFileTracingIncludes/serverExternalPackages combination
+ * is set in next.config.ts (confirmed across multiple real cache-free
+ * deploys), so we short-circuit Node's own module resolution for that exact
+ * absolute path and hand back a copy of the file's contents that we bundled
+ * ourselves as a plain JSON import (which Next always includes, since it's
+ * a normal static import from our own source rather than a dynamic path
+ * computed inside a third-party package at runtime).
+ *
+ * Critically, this must run BEFORE playwright-core is loaded at all — a
+ * static `import { chromium } from "playwright-core"` at the top of this
+ * file would get hoisted and evaluated before this patch (or any other
+ * code in this file) ever runs, crashing immediately. So playwright-core is
+ * never statically imported here — only loaded via a dynamic import() after
+ * this patch has already been applied at module load time below.
  */
 let browsersJsonPatched = false;
 function patchPlaywrightBrowsersJson(): void {
@@ -48,6 +54,15 @@ function patchPlaywrightBrowsersJson(): void {
   }
 }
 
+// Runs once, immediately, the first time this module is loaded — before any
+// caller has a chance to trigger a dynamic import of playwright-core below.
+patchPlaywrightBrowsersJson();
+
+async function loadChromium() {
+  const { chromium } = await import("playwright-core");
+  return chromium;
+}
+
 /**
  * Vercel's serverless functions can't run a full local Chromium install (too
  * large, no download step at runtime) — @sparticuz/chromium ships a trimmed
@@ -57,7 +72,6 @@ function patchPlaywrightBrowsersJson(): void {
  */
 async function resolveLaunchOptions() {
   if (!process.env.VERCEL) return { headless: true as const };
-  patchPlaywrightBrowsersJson();
   const chromiumBinary = (await import("@sparticuz/chromium")).default;
   return {
     args: chromiumBinary.args,
@@ -93,7 +107,10 @@ let sharedBrowser: Promise<Browser> | null = null;
 /** Lazily launches one shared headless Chromium instance for the process, reused across crawls to avoid a multi-second launch cost per lead. */
 export function getSharedBrowser(): Promise<Browser> {
   if (!sharedBrowser) {
-    sharedBrowser = resolveLaunchOptions().then((options) => chromium.launch(options));
+    sharedBrowser = resolveLaunchOptions().then(async (options) => {
+      const chromium = await loadChromium();
+      return chromium.launch(options);
+    });
   }
   return sharedBrowser;
 }
