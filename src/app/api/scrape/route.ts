@@ -2,11 +2,9 @@ import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { startCampaignScrape } from "@/lib/scrapeRun";
 
-// Extends how long Vercel keeps this function alive for the after()-scheduled
-// background scrape/poll work in scrapeRun.ts (see the comment there) — the
-// response itself returns almost immediately either way. 60s is the Hobby
-// plan ceiling; raise this if you're on Pro and doing larger multi-location/
-// auto-grid scrapes that need longer to finish polling Apify.
+// The response returns almost immediately (startCampaignScrape only starts
+// the first Apify run, it doesn't poll it to completion) — this just leaves
+// headroom in case that first "start" call itself is slow.
 export const maxDuration = 60;
 
 const scrapeSchema = z.object({
