@@ -1,6 +1,52 @@
 import { chromium, type Browser } from "playwright-core";
+import path from "node:path";
+import { createRequire } from "node:module";
+import browsersRegistry from "./playwrightBrowsersRegistry.json";
 
 const NAV_TIMEOUT_MS = 25_000;
+
+/**
+ * On Vercel, playwright-core's own registry code does a runtime
+ * `require(path.join(packageRoot, "browsers.json"))` the first time
+ * chromium.launch() is called. That file reliably gets dropped from the
+ * deployed function no matter what outputFileTracingIncludes/
+ * serverExternalPackages combination is set in next.config.ts (confirmed
+ * across multiple real cache-free deploys) — Next's static tracer never
+ * reliably picks it up. Rather than fight the bundler further, we
+ * short-circuit Node's own module resolution for that exact absolute path
+ * and hand back a copy of the file's contents that we bundled ourselves as
+ * a plain JSON import (which Next always includes, since it's a normal
+ * static import from our own source rather than a dynamic path computed
+ * inside a third-party package at runtime).
+ */
+let browsersJsonPatched = false;
+function patchPlaywrightBrowsersJson(): void {
+  if (browsersJsonPatched || !process.env.VERCEL) return;
+  browsersJsonPatched = true;
+  try {
+    const require = createRequire(import.meta.url);
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const Module = require("module") as any;
+    const packageJsonPath = require.resolve("playwright-core/package.json");
+    const browsersJsonPath = path.join(path.dirname(packageJsonPath), "browsers.json");
+
+    Module._cache[browsersJsonPath] = {
+      id: browsersJsonPath,
+      filename: browsersJsonPath,
+      loaded: true,
+      exports: browsersRegistry,
+    };
+
+    const originalResolveFilename = Module._resolveFilename;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    Module._resolveFilename = function (request: string, ...rest: any[]) {
+      if (request === browsersJsonPath) return browsersJsonPath;
+      return originalResolveFilename.call(this, request, ...rest);
+    };
+  } catch (err) {
+    console.error("[headlessFetch] failed to patch playwright-core's browsers.json lookup", err);
+  }
+}
 
 /**
  * Vercel's serverless functions can't run a full local Chromium install (too
@@ -11,6 +57,7 @@ const NAV_TIMEOUT_MS = 25_000;
  */
 async function resolveLaunchOptions() {
   if (!process.env.VERCEL) return { headless: true as const };
+  patchPlaywrightBrowsersJson();
   const chromiumBinary = (await import("@sparticuz/chromium")).default;
   return {
     args: chromiumBinary.args,
