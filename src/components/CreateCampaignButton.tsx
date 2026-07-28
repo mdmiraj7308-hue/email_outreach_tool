@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { btnPrimary, btnGhost, input as inputClass } from "@/lib/ui";
 
@@ -10,6 +10,16 @@ export function CreateCampaignButton() {
   const [targetCount, setTargetCount] = useState(20);
   const [creating, setCreating] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [availableCount, setAvailableCount] = useState<number | null>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    setAvailableCount(null);
+    fetch("/api/sending-campaigns/fresh-pool-count")
+      .then((r) => r.json())
+      .then((data) => setAvailableCount(data.count))
+      .catch(() => {});
+  }, [open]);
 
   async function handleCreate() {
     setCreating(true);
@@ -20,7 +30,8 @@ export function CreateCampaignButton() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ targetCount }),
       });
-      const data = await res.json();
+      const data = await res.json().catch(() => null);
+      if (!data) throw new Error("The server returned an unexpected response — please try again.");
       if (!res.ok) throw new Error(data.error ?? "Failed to create campaign");
       router.push(`/sending-campaigns/${data.campaignId}`);
     } catch (err) {
@@ -37,6 +48,9 @@ export function CreateCampaignButton() {
       </button>
     );
   }
+
+  const requestingMoreThanAvailable =
+    availableCount !== null && targetCount > availableCount && availableCount > 0;
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-[var(--ink)]/40 backdrop-blur-sm">
@@ -57,13 +71,29 @@ export function CreateCampaignButton() {
             onChange={(e) => setTargetCount(Number(e.target.value))}
             className={inputClass}
           />
+          <p className="text-xs text-[var(--ink-soft)]">
+            {availableCount === null
+              ? "Checking how many fresh leads are available…"
+              : availableCount === 0
+                ? "No fresh qualified leads available right now — enrich or draft more first."
+                : `${availableCount} fresh qualified lead${availableCount === 1 ? "" : "s"} available.`}
+          </p>
+          {requestingMoreThanAvailable && (
+            <p className="text-xs text-amber-600">
+              Only {availableCount} will be used — that&apos;s all that&apos;s available right now.
+            </p>
+          )}
         </div>
         {error && <p className="text-sm text-red-600">{error}</p>}
         <div className="flex justify-end gap-2">
           <button onClick={() => setOpen(false)} disabled={creating} className={btnGhost}>
             Cancel
           </button>
-          <button onClick={handleCreate} disabled={creating} className={btnPrimary}>
+          <button
+            onClick={handleCreate}
+            disabled={creating || availableCount === 0}
+            className={btnPrimary}
+          >
             {creating ? "Creating…" : "Create"}
           </button>
         </div>

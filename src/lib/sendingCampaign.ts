@@ -10,7 +10,7 @@ import { format, startOfDay, endOfDay } from "date-fns";
  * flag needed, membership in SendingCampaignLead IS the "already used"
  * marker. Hottest (highest fit score) first, oldest as tiebreak.
  */
-export async function getFreshLeadPool(limit: number) {
+async function getFreshLeadCandidates() {
   const candidates = await prisma.lead.findMany({
     where: {
       ...QUALIFIED_LEAD_WHERE,
@@ -24,10 +24,19 @@ export async function getFreshLeadPool(limit: number) {
     },
     select: { id: true, primaryEmail: true, fitScore: true, createdAt: true },
     orderBy: [{ fitScore: "desc" }, { createdAt: "asc" }],
-    take: limit * 2, // over-fetch a bit since filterOutDuplicateEmails may drop some
   });
-  const deduped = await filterOutDuplicateEmails(candidates);
+  return filterOutDuplicateEmails(candidates);
+}
+
+export async function getFreshLeadPool(limit: number) {
+  const deduped = await getFreshLeadCandidates();
   return deduped.slice(0, limit);
+}
+
+/** How many leads a "Create Campaign" click could actually draw from right now — shown in the UI before the user picks a count. */
+export async function getFreshLeadPoolCount(): Promise<number> {
+  const deduped = await getFreshLeadCandidates();
+  return deduped.length;
 }
 
 /** Evenly distributes N leads across active sender accounts, round-robin (remainder spread one-at-a-time, not piled on the last account). */
@@ -73,17 +82,20 @@ export async function createSendingCampaign(
     },
   });
 
-  await prisma.$transaction(
-    pool.map((lead) =>
-      prisma.sendingCampaignLead.create({
-        data: {
-          sendingCampaignId: campaign.id,
-          leadId: lead.id,
-          senderAccountId: assignment.get(lead)!,
-        },
-      })
-    )
-  );
+  // A single bulk insert instead of an array-form $transaction of N
+  // individual create() calls — that pattern already timed out in
+  // production once (see insertLeadsFromDataset in scrapeRun.ts) once N got
+  // large enough that N round-trips to Supabase exceeded Prisma's default
+  // 5s interactive-transaction timeout, throwing uncaught and returning an
+  // empty response body (surfaced client-side as "Unexpected end of JSON
+  // input"). Same fix here.
+  await prisma.sendingCampaignLead.createMany({
+    data: pool.map((lead) => ({
+      sendingCampaignId: campaign.id,
+      leadId: lead.id,
+      senderAccountId: assignment.get(lead)!,
+    })),
+  });
 
   return { ok: true, campaignId: campaign.id, leadCount: pool.length };
 }

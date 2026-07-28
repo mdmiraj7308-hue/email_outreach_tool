@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { btnGhost, btnPrimary, input as inputClass } from "@/lib/ui";
 
@@ -15,6 +15,15 @@ export function ScrapeForm() {
   const [maxLeads, setMaxLeads] = useState(20);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [scrapeLimit, setScrapeLimit] = useState<number | null>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    fetch("/api/settings")
+      .then((r) => r.json())
+      .then((data) => setScrapeLimit(typeof data.globalScrapeLimit === "number" ? data.globalScrapeLimit : null))
+      .catch(() => {});
+  }, [open]);
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -194,6 +203,13 @@ export function ScrapeForm() {
             onChange={(e) => setMaxLeads(Number(e.target.value))}
             className={inputClass}
           />
+          {scrapeLimit !== null && maxLeads > scrapeLimit && (
+            <p className="text-sm text-amber-600">
+              Your Settings cap any single scrape at {scrapeLimit} leads — this request will be
+              silently capped to {scrapeLimit}. Raise &quot;Global Scrape Limit&quot; in Settings
+              first if you actually need more.
+            </p>
+          )}
         </div>
 
         {error && <p className="text-sm text-red-600">{error}</p>}
