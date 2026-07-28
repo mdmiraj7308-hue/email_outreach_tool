@@ -30,6 +30,14 @@ model Settings {
   globalScrapeLimit    Int @default(100)
   globalSendLimit      Int @default(50)
 
+  // Day of the month (1-28, to sidestep short-month edge cases) that every
+  // ApifyAccount's leadsScraped counter resets to 0 — null means no
+  // auto-reset is configured, counters stay a running lifetime total.
+  // apifyResetLastRunAt tracks the last time the reset actually fired so a
+  // cron tick landing on the same day multiple times doesn't reset twice.
+  apifyResetDayOfMonth Int?
+  apifyResetLastRunAt  DateTime?
+
   // Per-account, per-sequence-stage daily send caps — an account can send
   // up to this many cold emails AND up to this many follow-up-2s AND up to
   // this many follow-up-3s on the same day (independent budgets, not a

@@ -45,6 +45,10 @@ const updateSchema = z
     googleSheetId: z.string().optional(),
     globalScrapeLimit: z.preprocess(nullToUndefined, z.number().int().positive().optional()),
     globalSendLimit: z.preprocess(nullToUndefined, z.number().int().positive().optional()),
+    // 0 means "no auto-reset configured" (disabled) — unlike the other
+    // optional-number fields here, this one needs an explicit off state the
+    // user can set from the UI, not just "leave unchanged".
+    apifyResetDayOfMonth: z.preprocess(nullToUndefined, z.number().int().min(0).max(28).optional()),
     dailyCapCold: z.preprocess(nullToUndefined, z.number().int().positive().optional()),
     dailyCapFollowup2: z.preprocess(nullToUndefined, z.number().int().positive().optional()),
     dailyCapFollowup3: z.preprocess(nullToUndefined, z.number().int().positive().optional()),

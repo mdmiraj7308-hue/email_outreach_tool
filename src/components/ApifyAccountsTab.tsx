@@ -18,18 +18,41 @@ export function ApifyAccountsTab() {
   const [newToken, setNewToken] = useState("");
   const [newLabel, setNewLabel] = useState("");
   const [error, setError] = useState<string | null>(null);
+  const [resetDay, setResetDay] = useState<number | "">("");
+  const [resetSaving, setResetSaving] = useState(false);
+  const [resetSaved, setResetSaved] = useState(false);
 
   async function load() {
     setLoading(true);
-    const res = await fetch("/api/apify-accounts");
-    const data = await res.json();
+    const [accountsRes, settingsRes] = await Promise.all([
+      fetch("/api/apify-accounts"),
+      fetch("/api/settings"),
+    ]);
+    const data = await accountsRes.json();
     setAccounts(data.accounts ?? []);
+    const settings = await settingsRes.json();
+    setResetDay(settings.apifyResetDayOfMonth ? settings.apifyResetDayOfMonth : "");
     setLoading(false);
   }
 
   useEffect(() => {
     load();
   }, []);
+
+  async function handleSaveResetDay() {
+    setResetSaving(true);
+    setResetSaved(false);
+    try {
+      await fetch("/api/settings", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ apifyResetDayOfMonth: resetDay === "" ? 0 : resetDay }),
+      });
+      setResetSaved(true);
+    } finally {
+      setResetSaving(false);
+    }
+  }
 
   async function handleAdd() {
     if (!newToken.trim()) return;
@@ -144,6 +167,33 @@ export function ApifyAccountsTab() {
         <button onClick={handleAdd} disabled={adding || !newToken.trim()} className={btnPrimary}>
           {adding ? "Adding…" : "Add Account"}
         </button>
+      </div>
+
+      <div className="space-y-2 rounded-xl border border-[var(--border)] p-4">
+        <p className="text-sm font-medium text-[var(--ink)]">
+          Automatically reset leads-scraped counters
+        </p>
+        <p className="text-sm text-[var(--ink-soft)]">
+          &quot;Leads scraped&quot; above never resets on its own — once an account crosses its
+          limit it stays excluded from scraping forever unless you raise the number or reset it
+          here. Pick a day of month (1-28) and every account&apos;s counter resets to 0 on that
+          day, every month, automatically.
+        </p>
+        <div className="flex items-center gap-2">
+          <input
+            type="number"
+            min={1}
+            max={28}
+            placeholder="Off"
+            value={resetDay}
+            onChange={(e) => setResetDay(e.target.value === "" ? "" : Number(e.target.value))}
+            className={`${inputClass} w-24`}
+          />
+          <button onClick={handleSaveResetDay} disabled={resetSaving} className={btnPrimary}>
+            {resetSaving ? "Saving…" : "Save"}
+          </button>
+          {resetSaved && <span className="text-sm text-[var(--ink-soft)]">Saved.</span>}
+        </div>
       </div>
     </div>
   );

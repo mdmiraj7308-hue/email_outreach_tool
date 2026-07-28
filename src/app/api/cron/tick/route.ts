@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { runDueFollowups } from "@/lib/scheduler/jobs/followupJob";
 import { runReplyChecks } from "@/lib/scheduler/jobs/replyCheckJob";
 import { runBounceChecks } from "@/lib/scheduler/jobs/bounceCheckJob";
+import { runApifyResetIfDue } from "@/lib/scheduler/jobs/apifyResetJob";
 import { advanceInProgressScrapes } from "@/lib/scrapeRun";
 
 /**
@@ -23,6 +24,7 @@ export async function GET(req: NextRequest) {
     runDueFollowups(),
     runReplyChecks(),
     runBounceChecks(),
+    runApifyResetIfDue(),
     advanceInProgressScrapes(),
   ]);
   const errors = results

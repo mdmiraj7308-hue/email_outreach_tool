@@ -1,6 +1,7 @@
 import { runDueFollowups } from "@/lib/scheduler/jobs/followupJob";
 import { runReplyChecks } from "@/lib/scheduler/jobs/replyCheckJob";
 import { runBounceChecks } from "@/lib/scheduler/jobs/bounceCheckJob";
+import { runApifyResetIfDue } from "@/lib/scheduler/jobs/apifyResetJob";
 import { advanceInProgressScrapes } from "@/lib/scrapeRun";
 import {
   FOLLOWUP_JOB_INTERVAL_MS,
@@ -67,6 +68,19 @@ async function tickScrapeAdvance() {
   }
 }
 
+let apifyResetJobRunning = false;
+async function tickApifyReset() {
+  if (apifyResetJobRunning) return;
+  apifyResetJobRunning = true;
+  try {
+    await runApifyResetIfDue();
+  } catch (err) {
+    console.error("[scheduler] apify reset job failed", err);
+  } finally {
+    apifyResetJobRunning = false;
+  }
+}
+
 export function initScheduler() {
   if (globalThis.__schedulerStarted) return;
   globalThis.__schedulerStarted = true;
@@ -77,11 +91,16 @@ export function initScheduler() {
   void tickReplyChecks();
   void tickBounceChecks();
   void tickScrapeAdvance();
+  void tickApifyReset();
 
   setInterval(tickFollowups, FOLLOWUP_JOB_INTERVAL_MS);
   setInterval(tickReplyChecks, REPLY_CHECK_JOB_INTERVAL_MS);
   setInterval(tickBounceChecks, BOUNCE_CHECK_JOB_INTERVAL_MS);
   setInterval(tickScrapeAdvance, SCRAPE_ADVANCE_JOB_INTERVAL_MS);
+  // Only truly needs to fire once a day; reusing the bounce-check cadence
+  // is cheap (a single settings read, no-op unless the reset day has
+  // actually arrived) and avoids adding yet another interval constant.
+  setInterval(tickApifyReset, BOUNCE_CHECK_JOB_INTERVAL_MS);
 
   console.log("[scheduler] initialized");
 }
