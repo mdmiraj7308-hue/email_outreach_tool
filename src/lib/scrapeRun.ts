@@ -209,12 +209,33 @@ async function checkInFlightRun(
   if (status.status === "RUNNING" || status.status === "READY") return; // still going
 
   if (status.status === "SUCCEEDED" && status.defaultDatasetId) {
-    const { duplicatesSkipped, rawCount } = await insertLeadsFromDataset(
-      campaignRunId,
-      account.token,
-      status.defaultDatasetId
-    );
-    await incrementLeadsScraped(account.id, rawCount);
+    let duplicatesSkipped: number;
+    let rawCount: number;
+    try {
+      ({ duplicatesSkipped, rawCount } = await insertLeadsFromDataset(
+        campaignRunId,
+        account.token,
+        status.defaultDatasetId
+      ));
+    } catch (err) {
+      // Without this, a failure here (Prisma hiccup, Apify dataset-read
+      // error, anything) would leave apifyRunId/scrapeAccountId un-cleared
+      // forever — every subsequent tick re-enters this same branch and
+      // retries the exact same dataset indefinitely. Treat it like a
+      // failed tile instead: log, move on to whatever's next.
+      console.error(`[scrape ${campaignRunId}] failed to insert leads from dataset ${status.defaultDatasetId}`, err);
+      await finishCurrentItem(campaignRunId, state, 0);
+      return;
+    }
+    // Newly-created rows only (rawCount minus duplicates), not the raw
+    // Apify result count — matters both for idempotency (a retried insert
+    // naturally finds 0 new rows the second time, since dedup already
+    // caught them, so no double-counting) and so this number always
+    // reconciles cleanly with the actual Lead + NoWebsiteLead counts you
+    // see in the UI, rather than drifting from Apify's own raw per-tile
+    // count whenever duplicates are involved.
+    const newRecordsCount = rawCount - duplicatesSkipped;
+    await incrementLeadsScraped(account.id, newRecordsCount);
     await finishCurrentItem(campaignRunId, state, duplicatesSkipped, rawCount);
   } else {
     console.error(`[scrape ${campaignRunId}] Apify run ${apifyRunId} ended as ${status.status}`);
