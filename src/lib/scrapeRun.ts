@@ -211,8 +211,9 @@ async function checkInFlightRun(
   if (status.status === "SUCCEEDED" && status.defaultDatasetId) {
     let duplicatesSkipped: number;
     let rawCount: number;
+    let newRecordsCount: number;
     try {
-      ({ duplicatesSkipped, rawCount } = await insertLeadsFromDataset(
+      ({ duplicatesSkipped, rawCount, newRecordsCount } = await insertLeadsFromDataset(
         campaignRunId,
         account.token,
         status.defaultDatasetId
@@ -227,14 +228,9 @@ async function checkInFlightRun(
       await finishCurrentItem(campaignRunId, state, 0);
       return;
     }
-    // Newly-created rows only (rawCount minus duplicates), not the raw
-    // Apify result count — matters both for idempotency (a retried insert
-    // naturally finds 0 new rows the second time, since dedup already
-    // caught them, so no double-counting) and so this number always
-    // reconciles cleanly with the actual Lead + NoWebsiteLead counts you
-    // see in the UI, rather than drifting from Apify's own raw per-tile
-    // count whenever duplicates are involved.
-    const newRecordsCount = rawCount - duplicatesSkipped;
+    // newRecordsCount reflects rows actually written to the DB, so it
+    // always reconciles cleanly with the actual Lead + NoWebsiteLead counts
+    // you see in the UI, and can't drift even on a retried/overlapping tick.
     await incrementLeadsScraped(account.id, newRecordsCount);
     await finishCurrentItem(campaignRunId, state, duplicatesSkipped, rawCount);
   } else {
@@ -389,7 +385,7 @@ async function insertLeadsFromDataset(
   campaignRunId: string,
   apifyToken: string,
   datasetId: string
-): Promise<{ duplicatesSkipped: number; rawCount: number }> {
+): Promise<{ duplicatesSkipped: number; rawCount: number; newRecordsCount: number }> {
   const places = await fetchScrapedLeads(apifyToken, datasetId);
 
   const placeIds = places.map((p) => p.placeId).filter((id): id is string => !!id);
@@ -413,7 +409,6 @@ async function insertLeadsFromDataset(
   );
 
   const newPlaces = places.filter((p) => !p.placeId || !existingPlaceIds.has(p.placeId));
-  const duplicatesSkipped = places.length - newPlaces.length;
 
   // Businesses with no real website (a Google Maps listing url doesn't
   // count) have nothing for the enrichment/drafting pipeline to work with,
@@ -456,23 +451,35 @@ async function insertLeadsFromDataset(
     await syncLeadToSheet(lead.id);
   }
 
-  if (withoutWebsite.length > 0) {
-    const noWebsiteRecords = await prisma.noWebsiteLead.createManyAndReturn({
-      data: withoutWebsite.map((place) => ({
-        campaignRunId,
-        googlePlaceId: place.placeId,
-        businessName: place.businessName,
-        phone: nullify(place.phone),
-        address: nullify(place.address),
-        category: nullify(place.category),
-        googleMapsUrl: nullify(place.mapsUrl),
-      })),
-      skipDuplicates: true,
-    });
+  const noWebsiteRecords =
+    withoutWebsite.length > 0
+      ? await prisma.noWebsiteLead.createManyAndReturn({
+          data: withoutWebsite.map((place) => ({
+            campaignRunId,
+            googlePlaceId: place.placeId,
+            businessName: place.businessName,
+            phone: nullify(place.phone),
+            address: nullify(place.address),
+            category: nullify(place.category),
+            googleMapsUrl: nullify(place.mapsUrl),
+          })),
+          skipDuplicates: true,
+        })
+      : [];
+  if (noWebsiteRecords.length > 0) {
     await pushNoWebsiteLeadsToSheet(noWebsiteRecords);
   }
 
-  return { duplicatesSkipped, rawCount: places.length };
+  // Counted from what was actually written to the DB (leads.length +
+  // noWebsiteRecords.length), not from places.length minus the pre-insert
+  // duplicate check — that subtraction overcounted whenever `skipDuplicates`
+  // silently dropped a row the pre-check didn't catch (e.g. the same place
+  // appearing twice within one Apify dataset, or two overlapping cron ticks
+  // racing on the same dataset), so it drifted from the real Lead +
+  // NoWebsiteLead counts. Deriving from the actual insert results can never
+  // overcount, by construction.
+  const newRecordsCount = leads.length + noWebsiteRecords.length;
+  return { duplicatesSkipped: places.length - newRecordsCount, rawCount: places.length, newRecordsCount };
 }
 
 async function pushNoWebsiteLeadsToSheet(
