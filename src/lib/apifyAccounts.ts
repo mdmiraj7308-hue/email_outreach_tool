@@ -85,6 +85,10 @@ const QUOTA_ERROR_KEYWORDS = [
   "usage limit",
   "insufficient",
   "exceeded your",
+  "exceed your remaining usage",
+  "not enough usage",
+  "not-enough-usage",
+  "upgrading to a paid plan",
   "rate limit",
   "not enough credit",
 ];
