@@ -20,16 +20,20 @@ export default async function RunDetailPage({
   const { filter } = await searchParams;
   const qualifiedOnly = filter === "qualified";
 
-  const run = await prisma.campaignRun.findUnique({
-    where: { id: runId },
-    include: {
-      leads: {
-        orderBy: { createdAt: "asc" },
-        include: { emailSends: true },
-        where: qualifiedOnly ? QUALIFIED_LEAD_WHERE : undefined,
+  const [run, totalLeadsCount, qualifiedLeadsCount] = await Promise.all([
+    prisma.campaignRun.findUnique({
+      where: { id: runId },
+      include: {
+        leads: {
+          orderBy: { createdAt: "asc" },
+          include: { emailSends: true },
+          where: qualifiedOnly ? QUALIFIED_LEAD_WHERE : undefined,
+        },
       },
-    },
-  });
+    }),
+    prisma.lead.count({ where: { campaignRunId: runId } }),
+    prisma.lead.count({ where: { campaignRunId: runId, ...QUALIFIED_LEAD_WHERE } }),
+  ]);
 
   if (!run) notFound();
 
@@ -84,7 +88,7 @@ export default async function RunDetailPage({
                 : "text-[var(--ink-soft)] hover:bg-neutral-50"
             }`}
           >
-            All Leads
+            All Leads ({totalLeadsCount})
           </Link>
           <Link
             href={`/runs/${run.id}?filter=qualified`}
@@ -94,7 +98,8 @@ export default async function RunDetailPage({
                 : "text-[var(--ink-soft)] hover:bg-neutral-50"
             }`}
           >
-            Qualified Only (email + fit ≥ {LEAD_FILTER_MIN_FIT_SCORE})
+            Qualified Only ({qualifiedLeadsCount}/{totalLeadsCount}) — email + fit ≥{" "}
+            {LEAD_FILTER_MIN_FIT_SCORE}
           </Link>
         </div>
         {qualifiedOnly && <WriteEmailsAndUploadButton campaignRunId={run.id} />}

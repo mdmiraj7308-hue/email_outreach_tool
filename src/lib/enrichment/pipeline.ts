@@ -161,7 +161,14 @@ export async function enrichCampaignRun(campaignRunId: string): Promise<EnrichRu
   const leads = await prisma.lead.findMany({
     where: {
       campaignRunId,
-      enrichmentStatus: { in: ["pending", "failed", "unreachable"] },
+      OR: [
+        { enrichmentStatus: { in: ["pending", "failed", "unreachable"] } },
+        // "done" but no email ever got extracted is still worth retrying —
+        // e.g. an extraction-logic fix landed after this lead was already
+        // enriched under the old code. Never applies to "no_website" leads
+        // (nothing to re-crawl there).
+        { enrichmentStatus: "done", primaryEmail: "null", leadType: { not: "no_website" } },
+      ],
     },
     select: { id: true },
   });

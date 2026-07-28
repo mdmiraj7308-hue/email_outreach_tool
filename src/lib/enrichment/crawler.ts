@@ -13,7 +13,24 @@ const PAGE_LINK_KEYWORDS = [
   "get-started",
   "get started",
   "connect",
+  "reach",
+  "email",
+  "hello",
+  "support",
 ];
+
+// Tried directly whenever the homepage's own links don't turn up enough
+// candidates (e.g. the real nav is populated by JS and invisible to a
+// plain fetch, or uses icon-only links with no matching text/href) — cheap
+// since a 404 for a path that doesn't exist responds fast, and only fills
+// whatever slots discoverRelevantLinks left empty.
+const COMMON_CONTACT_PATHS = ["/contact", "/contact-us", "/about", "/about-us"];
+
+// A bare "is there anything email-shaped in this HTML at all" check — used
+// only to decide whether a page is worth a headless re-render, not to
+// extract the address itself (extractGenericEmail/extractFounderEmail
+// still own that, with their own filtering).
+const EMAIL_LIKE_RE = /[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/;
 
 export interface FetchedPage {
   url: string;
@@ -147,11 +164,39 @@ export async function crawlWebsite(websiteUrl: string): Promise<FetchedPage[]> {
   pages.push({ url: homepageUrl, html: homepage.html });
 
   const $ = cheerio.load(homepage.html);
-  const links = discoverRelevantLinks($, origin).filter((l) => l !== homepageUrl);
+  const discovered = discoverRelevantLinks($, origin).filter((l) => l !== homepageUrl);
+  // Only used to fill slots discovered links didn't already claim — real
+  // links always take priority, guesses are a cheap fallback, not a
+  // replacement.
+  const guessed = COMMON_CONTACT_PATHS.map((p) => `${origin}${p}`).filter(
+    (u) => u !== homepageUrl && !discovered.includes(u)
+  );
+  const candidateLinks = [...discovered, ...guessed];
 
-  for (const link of links.slice(0, MAX_PAGES - 1)) {
+  for (const link of candidateLinks.slice(0, MAX_PAGES - 1)) {
     const page = await fetchPageHtml(link);
     if (page.ok) pages.push({ url: link, html: page.html });
+  }
+
+  // Nothing email-shaped anywhere across every page fetched so far — most
+  // likely a JS-rendered site where the real content (often the whole
+  // footer) gets injected client-side after load, which a plain fetch
+  // never sees. looksBlocked() can't catch this case since the response is
+  // a normal 200, not a bot-wall page. One extra headless-rendered pass
+  // over the homepage gives client-injected content a chance, without
+  // slowing down the common case where an email was already found.
+  const anyEmailFound = pages.some((p) => EMAIL_LIKE_RE.test(p.html));
+  if (!anyEmailFound) {
+    try {
+      const browser = await getSharedBrowser();
+      const rendered = await fetchRenderedHtml(browser, homepageUrl);
+      if (EMAIL_LIKE_RE.test(rendered)) {
+        pages.push({ url: homepageUrl, html: rendered });
+      }
+    } catch {
+      // best-effort — if this also fails, we still have whatever the
+      // plain fetch(es) above already returned
+    }
   }
 
   return pages;
