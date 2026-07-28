@@ -8,7 +8,11 @@ export async function GET(
   const { runId } = await params;
   const run = await prisma.campaignRun.findUnique({
     where: { id: runId },
-    select: { id: true, status: true, _count: { select: { leads: true } } },
+    select: {
+      id: true,
+      status: true,
+      _count: { select: { leads: true, noWebsiteLeads: true } },
+    },
   });
   if (!run) {
     return NextResponse.json({ error: "Run not found" }, { status: 404 });
@@ -17,5 +21,6 @@ export async function GET(
     campaignRunId: run.id,
     status: run.status,
     leadCount: run._count.leads,
+    noWebsiteLeadCount: run._count.noWebsiteLeads,
   });
 }

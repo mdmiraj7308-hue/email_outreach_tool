@@ -68,6 +68,11 @@ export async function getRunStatus(
 export interface ScrapedPlace {
   businessName: string;
   website: string | null;
+  // The Google Maps listing URL itself (always present) — kept separate
+  // from `website` so a business with no real site never gets its Maps
+  // listing mistaken for one; used as the reference link for no-website
+  // leads routed to the "No Website Leads" sheet instead.
+  mapsUrl: string | null;
   email: string | null;
   phone: string | null;
   address: string | null;
@@ -90,7 +95,14 @@ export async function fetchScrapedLeads(
     const record = item as Record<string, unknown>;
     return {
       businessName: pickString(record, ["title", "name"]) ?? "Unknown business",
-      website: pickString(record, ["website", "url"]),
+      // NOT falling back to "url" — that's the Google Maps LISTING url Apify
+      // always returns (e.g. google.com/maps/search/?...), not the
+      // business's actual website. Falling back to it made every
+      // no-website business look like it had a real site, mis-set
+      // leadType to "standard" instead of "no_website", and sent the
+      // crawler off to try to scrape a Maps search page for an email.
+      website: pickString(record, ["website"]),
+      mapsUrl: pickString(record, ["url"]),
       email: pickString(record, ["email", "emails.0"]),
       phone: pickString(record, ["phone", "phoneUnformatted", "phoneNumber"]),
       address: pickString(record, ["address", "street"]),

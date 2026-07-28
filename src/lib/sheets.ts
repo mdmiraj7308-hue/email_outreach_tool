@@ -1,5 +1,5 @@
 import { google, sheets_v4 } from "googleapis";
-import { GOOGLE_SHEET_HEADERS } from "@/lib/constants";
+import { GOOGLE_SHEET_HEADERS, NO_WEBSITE_SHEET_HEADERS, NO_WEBSITE_SHEET_TAB_NAME } from "@/lib/constants";
 
 export interface SheetLeadRow {
   date: string; // YYYY-MM-DD
@@ -223,6 +223,85 @@ export async function deleteLeadRows(
         },
       })),
     },
+  });
+}
+
+export interface NoWebsiteSheetRow {
+  date: string; // YYYY-MM-DD
+  businessName: string;
+  phone: string;
+  address: string;
+  category: string;
+  googleMapsUrl: string;
+}
+
+function noWebsiteRowToValues(row: NoWebsiteSheetRow): string[] {
+  return [row.date, row.businessName, row.phone, row.address, row.category, row.googleMapsUrl];
+}
+
+/**
+ * Finds the dedicated "No Website Leads" tab by name, creating it (with its
+ * header row) the first time it's needed — unlike the main leads sheet,
+ * which always writes into whatever the user's own first tab is, this is a
+ * tab our own code owns, so it's fine to provision automatically.
+ */
+async function ensureNoWebsiteSheetTab(
+  sheets: sheets_v4.Sheets,
+  spreadsheetId: string
+): Promise<void> {
+  const meta = await sheets.spreadsheets.get({
+    spreadsheetId,
+    fields: "sheets.properties.title",
+  });
+  const exists = (meta.data.sheets ?? []).some(
+    (s) => s.properties?.title === NO_WEBSITE_SHEET_TAB_NAME
+  );
+  if (!exists) {
+    await sheets.spreadsheets.batchUpdate({
+      spreadsheetId,
+      requestBody: {
+        requests: [{ addSheet: { properties: { title: NO_WEBSITE_SHEET_TAB_NAME } } }],
+      },
+    });
+  }
+
+  const quoted = quoteSheetName(NO_WEBSITE_SHEET_TAB_NAME);
+  const lastCol = columnLetter(NO_WEBSITE_SHEET_HEADERS.length - 1);
+  const res = await sheets.spreadsheets.values.get({
+    spreadsheetId,
+    range: `${quoted}!A1:${lastCol}1`,
+  });
+  const firstRow = res.data.values?.[0] ?? [];
+  const matches =
+    firstRow.length === NO_WEBSITE_SHEET_HEADERS.length &&
+    firstRow.every((cell, i) => cell === NO_WEBSITE_SHEET_HEADERS[i]);
+  if (!matches) {
+    await sheets.spreadsheets.values.update({
+      spreadsheetId,
+      range: `${quoted}!A1`,
+      valueInputOption: "RAW",
+      requestBody: { values: [NO_WEBSITE_SHEET_HEADERS] },
+    });
+  }
+}
+
+/** Appends no-website leads to their dedicated sheet tab — append-only, no per-row updates needed since these never get enriched/sent to. */
+export async function appendNoWebsiteLeadRows(
+  serviceAccountJson: string,
+  spreadsheetId: string,
+  rows: NoWebsiteSheetRow[]
+): Promise<void> {
+  if (rows.length === 0) return;
+  const sheets = getClient(serviceAccountJson);
+  await ensureNoWebsiteSheetTab(sheets, spreadsheetId);
+
+  const quoted = quoteSheetName(NO_WEBSITE_SHEET_TAB_NAME);
+  await sheets.spreadsheets.values.append({
+    spreadsheetId,
+    range: `${quoted}!A:Z`,
+    valueInputOption: "RAW",
+    insertDataOption: "INSERT_ROWS",
+    requestBody: { values: rows.map(noWebsiteRowToValues) },
   });
 }
 

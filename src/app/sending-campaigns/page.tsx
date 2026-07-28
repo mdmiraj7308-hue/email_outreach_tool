@@ -1,12 +1,14 @@
 import Link from "next/link";
 import { prisma } from "@/lib/prisma";
 import { CreateCampaignButton } from "@/components/CreateCampaignButton";
+import { RemoveDraftCampaignButton } from "@/components/RemoveDraftCampaignButton";
 import { card, badgeClass } from "@/lib/ui";
 
 export const dynamic = "force-dynamic";
 
 export default async function SendingCampaignsPage() {
   const campaigns = await prisma.sendingCampaign.findMany({
+    where: { status: { not: "cancelled" } },
     orderBy: { createdAt: "desc" },
     include: { _count: { select: { leads: true } } },
   });
@@ -37,7 +39,10 @@ export default async function SendingCampaignsPage() {
                   <p className="font-medium text-[var(--ink)]">{c.label}</p>
                   <p className="text-sm text-[var(--ink-soft)]">{c._count.leads} leads</p>
                 </div>
-                <span className={badgeClass(c.status === "draft" ? "amber" : "green")}>{c.status}</span>
+                <div className="flex items-center gap-2">
+                  {c.status === "draft" && <RemoveDraftCampaignButton campaignId={c.id} />}
+                  <span className={badgeClass(c.status === "draft" ? "amber" : "green")}>{c.status}</span>
+                </div>
               </div>
             </Link>
           ))}

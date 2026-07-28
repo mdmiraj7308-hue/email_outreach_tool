@@ -2,6 +2,7 @@ import { prisma } from "@/lib/prisma";
 import { getSettings } from "@/lib/settings";
 import { fetchScrapedLeads, getRunStatus, startGoogleMapsScrape } from "@/lib/apify";
 import { syncLeadToSheet } from "@/lib/leadSheetSync";
+import { appendNoWebsiteLeadRows } from "@/lib/sheets";
 import { nullify } from "@/lib/nullify";
 import { geocodeBoundingBox } from "@/lib/geocoding";
 import { pickGridDimensions, splitIntoTiles, subdivideTile, tileToGeoJsonPolygon, type GridTile } from "@/lib/geoGrid";
@@ -374,41 +375,107 @@ async function insertLeadsFromDataset(
   const existingPlaceIds = new Set(
     placeIds.length > 0
       ? (
-          await prisma.lead.findMany({
-            where: { googlePlaceId: { in: placeIds } },
-            select: { googlePlaceId: true },
-          })
-        ).map((l) => l.googlePlaceId)
+          await Promise.all([
+            prisma.lead.findMany({
+              where: { googlePlaceId: { in: placeIds } },
+              select: { googlePlaceId: true },
+            }),
+            prisma.noWebsiteLead.findMany({
+              where: { googlePlaceId: { in: placeIds } },
+              select: { googlePlaceId: true },
+            }),
+          ])
+        )
+          .flat()
+          .map((l) => l.googlePlaceId)
       : []
   );
 
   const newPlaces = places.filter((p) => !p.placeId || !existingPlaceIds.has(p.placeId));
   const duplicatesSkipped = places.length - newPlaces.length;
 
-  const leads = await prisma.$transaction(
-    newPlaces.map((place) =>
-      prisma.lead.create({
-        data: {
-          campaignRunId,
-          googlePlaceId: place.placeId,
-          businessName: place.businessName,
-          website: nullify(place.website),
-          category: nullify(place.category),
-          scrapedEmail: nullify(place.email),
-          primaryEmail: nullify(place.email),
-          phone: nullify(place.phone),
-          address: nullify(place.address),
-          leadType: place.website ? "standard" : "no_website",
-        },
-      })
-    )
-  );
+  // Businesses with no real website (a Google Maps listing url doesn't
+  // count) have nothing for the enrichment/drafting pipeline to work with,
+  // so they never become a Lead row at all — routed straight to the
+  // dedicated "No Website Leads" sheet tab instead.
+  const withWebsite = newPlaces.filter((p) => p.website);
+  const withoutWebsite = newPlaces.filter((p) => !p.website);
+
+  // A single-tile dataset can be 100+ places (TILE_REQUEST_CAP=120) — an
+  // array-form $transaction([...]) of that many individual create() calls
+  // defaults to a 5s interactive-transaction timeout and reliably blew past
+  // it talking to Supabase from Vercel (confirmed in production: "A
+  // rollback cannot be executed on an expired transaction"), silently
+  // dropping the whole batch even though Apify itself had already
+  // succeeded. createManyAndReturn is a single bulk INSERT — one round
+  // trip, no per-row transaction overhead. skipDuplicates guards against
+  // the rare case of the same place appearing twice within one dataset
+  // (not just against leads already in the DB, which newPlaces already
+  // filtered for).
+  const leads =
+    withWebsite.length > 0
+      ? await prisma.lead.createManyAndReturn({
+          data: withWebsite.map((place) => ({
+            campaignRunId,
+            googlePlaceId: place.placeId,
+            businessName: place.businessName,
+            website: nullify(place.website),
+            category: nullify(place.category),
+            scrapedEmail: nullify(place.email),
+            primaryEmail: nullify(place.email),
+            phone: nullify(place.phone),
+            address: nullify(place.address),
+            leadType: "standard",
+          })),
+          skipDuplicates: true,
+        })
+      : [];
 
   for (const lead of leads) {
     await syncLeadToSheet(lead.id);
   }
 
+  if (withoutWebsite.length > 0) {
+    const noWebsiteRecords = await prisma.noWebsiteLead.createManyAndReturn({
+      data: withoutWebsite.map((place) => ({
+        campaignRunId,
+        googlePlaceId: place.placeId,
+        businessName: place.businessName,
+        phone: nullify(place.phone),
+        address: nullify(place.address),
+        category: nullify(place.category),
+        googleMapsUrl: nullify(place.mapsUrl),
+      })),
+      skipDuplicates: true,
+    });
+    await pushNoWebsiteLeadsToSheet(noWebsiteRecords);
+  }
+
   return { duplicatesSkipped, rawCount: places.length };
+}
+
+async function pushNoWebsiteLeadsToSheet(
+  records: { businessName: string; phone: string; address: string; category: string; googleMapsUrl: string; createdAt: Date }[]
+): Promise<void> {
+  const settings = await getSettings();
+  if (!settings.googleServiceAccountJson || !settings.googleSheetId) return;
+
+  try {
+    await appendNoWebsiteLeadRows(
+      settings.googleServiceAccountJson,
+      settings.googleSheetId,
+      records.map((r) => ({
+        date: format(r.createdAt, "yyyy-MM-dd"),
+        businessName: r.businessName,
+        phone: r.phone,
+        address: r.address,
+        category: r.category,
+        googleMapsUrl: r.googleMapsUrl,
+      }))
+    );
+  } catch (err) {
+    console.error("[scrape] failed to push no-website leads to sheet", err);
+  }
 }
 
 function parseState(raw: string | null): ScrapeState | null {

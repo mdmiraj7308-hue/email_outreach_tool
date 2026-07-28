@@ -5,8 +5,10 @@ import { card, spamScoreBadge } from "@/lib/ui";
 
 interface SummaryData {
   totalLeadsScraped: number;
+  qualifiedLeads: number;
   totalSent: number;
   successfulSends: number;
+  failedSends: number;
   followup1Sent: number;
   followup2Sent: number;
   replyCount: number;
@@ -47,10 +49,12 @@ export function SummaryView() {
 
   return (
     <div className="space-y-6">
-      <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-6">
+      <div className="grid grid-cols-2 gap-4 sm:grid-cols-4 lg:grid-cols-8">
         <StatTile label="Leads Scraped" value={data.totalLeadsScraped} />
+        <StatTile label="Qualified Leads" value={data.qualifiedLeads} />
         <StatTile label="Total Sent" value={data.totalSent} />
         <StatTile label="Successful" value={data.successfulSends} />
+        <StatTile label="Failed" value={data.failedSends} />
         <StatTile label="2nd Follow-ups" value={data.followup1Sent} />
         <StatTile label="3rd Follow-ups" value={data.followup2Sent} />
         <StatTile label="Replies" value={data.replyCount} />

@@ -61,6 +61,17 @@ export const GOOGLE_SHEET_HEADERS = [
   "Reply Status",
 ];
 
+export const NO_WEBSITE_SHEET_TAB_NAME = "No Website Leads";
+
+export const NO_WEBSITE_SHEET_HEADERS = [
+  "Date",
+  "Business Name",
+  "Phone",
+  "Address",
+  "Category",
+  "Google Maps URL",
+];
+
 export const FOLLOWUP_JOB_INTERVAL_MS = 60_000;
 export const REPLY_CHECK_JOB_INTERVAL_MS = 5 * 60_000;
 export const BOUNCE_CHECK_JOB_INTERVAL_MS = 5 * 60_000;

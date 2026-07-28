@@ -1,5 +1,4 @@
 import type { Browser } from "playwright-core";
-import path from "node:path";
 import { createRequire } from "node:module";
 import browsersRegistry from "./playwrightBrowsersRegistry.json";
 
@@ -30,25 +29,48 @@ function patchPlaywrightBrowsersJson(): void {
   if (browsersJsonPatched || !process.env.VERCEL) return;
   browsersJsonPatched = true;
   try {
-    const require = createRequire(import.meta.url);
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const Module = require("module") as any;
-    const packageJsonPath = require.resolve("playwright-core/package.json");
-    const browsersJsonPath = path.join(path.dirname(packageJsonPath), "browsers.json");
-
-    Module._cache[browsersJsonPath] = {
-      id: browsersJsonPath,
-      filename: browsersJsonPath,
-      loaded: true,
-      exports: browsersRegistry,
-    };
-
-    const originalResolveFilename = Module._resolveFilename;
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    Module._resolveFilename = function (request: string, ...rest: any[]) {
-      if (request === browsersJsonPath) return browsersJsonPath;
-      return originalResolveFilename.call(this, request, ...rest);
-    };
+    // Turbopack statically recognizes ANY call made through a value that
+    // came from createRequire(...) and intercepts it at build time — it
+    // doesn't matter what the call is named or what argument (literal or
+    // runtime-computed) is passed, it still either rewrites the call to its
+    // own internal numeric module id or throws "Cannot find module ... too
+    // dynamic". Confirmed by trying: renaming the require binding (still
+    // intercepted), obfuscating the require.resolve() argument (still
+    // intercepted), obfuscating a bare require() argument (still
+    // intercepted). The only thing that actually evades this is hiding the
+    // require/Module logic inside a string evaluated via the Function
+    // constructor — no bundler parses the contents of a runtime string as
+    // part of the module's AST, so nothing inside it is visible to
+    // Turbopack's static analysis. createRequire itself, and the values
+    // passed in below, are ordinary function arguments and don't look like
+    // a require pattern from the outside.
+    //
+    // Vercel's Node.js functions always run with /var/task as the function
+    // root and node_modules flattened directly under it — confirmed
+    // repeatedly in this exact deployment's own error logs — so the path is
+    // hardcoded rather than derived via require.resolve().
+    const runUnanalyzed = new Function(
+      "createRequire",
+      "url",
+      "browsersRegistry",
+      `
+        var nodeRequire = createRequire(url);
+        var Module = nodeRequire("module");
+        var browsersJsonPath = "/var/task/node_modules/playwright-core/browsers.json";
+        Module._cache[browsersJsonPath] = {
+          id: browsersJsonPath,
+          filename: browsersJsonPath,
+          loaded: true,
+          exports: browsersRegistry,
+        };
+        var originalResolveFilename = Module._resolveFilename;
+        Module._resolveFilename = function (request) {
+          if (request === browsersJsonPath) return browsersJsonPath;
+          return originalResolveFilename.apply(this, arguments);
+        };
+      `
+    );
+    runUnanalyzed(createRequire, import.meta.url, browsersRegistry);
   } catch (err) {
     console.error("[headlessFetch] failed to patch playwright-core's browsers.json lookup", err);
   }

@@ -104,7 +104,31 @@ model CampaignRun {
   // transparent instead of silently shrinking the lead count.
   duplicatesSkipped Int @default(0)
 
-  leads Lead[]
+  leads          Lead[]
+  noWebsiteLeads NoWebsiteLead[]
+}
+
+// Businesses scraped with no real website (Apify's Maps listing url doesn't
+// count) never had anything for the crawler/drafting pipeline to work with,
+// so they're kept out of the main Lead pipeline entirely — no enrichment,
+// no sending, none of Lead's other columns. Just enough here to push them
+// to the "No Website Leads" sheet tab and to recognize the same business on
+// a future re-scrape instead of pushing it again.
+model NoWebsiteLead {
+  id            String      @id @default(cuid())
+  campaignRunId String
+  campaignRun   CampaignRun @relation(fields: [campaignRunId], references: [id])
+
+  googlePlaceId String?
+  businessName  String
+  phone         String   @default("null")
+  address       String   @default("null")
+  category      String   @default("null")
+  googleMapsUrl String   @default("null")
+  createdAt     DateTime @default(now())
+
+  @@unique([googlePlaceId])
+  @@index([campaignRunId])
 }
 
 model Lead {

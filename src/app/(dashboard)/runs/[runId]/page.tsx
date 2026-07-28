@@ -2,6 +2,7 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { prisma } from "@/lib/prisma";
 import { RunStatusPoller } from "@/components/RunStatusPoller";
+import { ScrapeProgressBar } from "@/components/ScrapeProgressBar";
 import { EnrichRunButton } from "@/components/EnrichRunButton";
 import { WriteEmailsAndUploadButton } from "@/components/WriteEmailsAndUploadButton";
 import { statusBadgeClass, fitBadge, emailDeliverabilityBadge, badgeClass } from "@/lib/ui";
@@ -70,40 +71,44 @@ export default async function RunDetailPage({
         </div>
         <div className="flex flex-wrap items-center justify-end gap-2">
           <EnrichRunButton campaignRunId={run.id} />
-          <WriteEmailsAndUploadButton campaignRunId={run.id} />
         </div>
       </div>
 
-      <div className="flex items-center gap-1 rounded-full border border-[var(--border)] bg-white p-1 w-fit">
-        <Link
-          href={`/runs/${run.id}`}
-          className={`rounded-full px-4 py-1.5 text-sm font-medium transition ${
-            !qualifiedOnly
-              ? "bg-[var(--brand)] text-white"
-              : "text-[var(--ink-soft)] hover:bg-neutral-50"
-          }`}
-        >
-          All Leads
-        </Link>
-        <Link
-          href={`/runs/${run.id}?filter=qualified`}
-          className={`rounded-full px-4 py-1.5 text-sm font-medium transition ${
-            qualifiedOnly
-              ? "bg-[var(--brand)] text-white"
-              : "text-[var(--ink-soft)] hover:bg-neutral-50"
-          }`}
-        >
-          Qualified Only (email + fit ≥ {LEAD_FILTER_MIN_FIT_SCORE})
-        </Link>
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div className="flex items-center gap-1 rounded-full border border-[var(--border)] bg-white p-1 w-fit">
+          <Link
+            href={`/runs/${run.id}`}
+            className={`rounded-full px-4 py-1.5 text-sm font-medium transition ${
+              !qualifiedOnly
+                ? "bg-[var(--brand)] text-white"
+                : "text-[var(--ink-soft)] hover:bg-neutral-50"
+            }`}
+          >
+            All Leads
+          </Link>
+          <Link
+            href={`/runs/${run.id}?filter=qualified`}
+            className={`rounded-full px-4 py-1.5 text-sm font-medium transition ${
+              qualifiedOnly
+                ? "bg-[var(--brand)] text-white"
+                : "text-[var(--ink-soft)] hover:bg-neutral-50"
+            }`}
+          >
+            Qualified Only (email + fit ≥ {LEAD_FILTER_MIN_FIT_SCORE})
+          </Link>
+        </div>
+        {qualifiedOnly && <WriteEmailsAndUploadButton campaignRunId={run.id} />}
       </div>
 
       {visibleLeads.length === 0 ? (
         <div className="rounded-2xl border border-dashed border-[var(--border)] bg-white px-6 py-16 text-center text-sm text-[var(--ink-soft)]">
-          {run.status === "scraping" || run.status === "pending"
-            ? "Scraping in progress…"
-            : qualifiedOnly
-              ? "No leads meet the qualification filter yet."
-              : "No leads found for this run."}
+          {run.status === "scraping" || run.status === "pending" ? (
+            <ScrapeProgressBar runId={run.id} maxLeads={run.maxLeads} />
+          ) : qualifiedOnly ? (
+            "No leads meet the qualification filter yet."
+          ) : (
+            "No leads found for this run."
+          )}
         </div>
       ) : (
         <div className="overflow-x-auto rounded-2xl border border-[var(--border)] bg-white shadow-sm">

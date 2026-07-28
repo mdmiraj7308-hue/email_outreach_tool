@@ -41,7 +41,14 @@ export function extractGenericEmail(pages: FetchedPage[], siteHostname?: string)
 
     candidates.push(...extractJsonLdEmails($));
 
-    $("script, style, nav, footer, noscript").remove();
+    // Deliberately NOT stripping nav/footer here (unlike extractCleanText,
+    // which strips them for LLM-summary purposes) — the footer is one of
+    // the most common places a business publishes its contact email as
+    // plain text rather than a mailto link (confirmed in practice: e.g.
+    // "info@contigoagency.com" sitting in a <footer><li> with no <a> tag
+    // at all), so removing it before this scan was silently dropping real,
+    // legitimate contact addresses.
+    $("script, style, noscript").remove();
     const bodyText = extractSpacedText($);
     for (const match of bodyText.matchAll(EMAIL_RE)) {
       if (isPlausibleEmail(match[0])) candidates.push(match[0]);

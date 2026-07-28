@@ -1,19 +1,30 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { refreshSenderSpamScore } from "@/lib/spamCheck";
+import { QUALIFIED_LEAD_WHERE } from "@/lib/leadQualification";
 
 const STALE_MS = 10 * 60 * 1000;
 
 export async function GET() {
-  const [totalLeadsScraped, totalSent, followup1Sent, followup2Sent, replyCount, accounts] =
-    await Promise.all([
-      prisma.lead.count(),
-      prisma.emailSend.count({ where: { status: "sent" } }),
-      prisma.emailSend.count({ where: { status: "sent", sequence: 2 } }),
-      prisma.emailSend.count({ where: { status: "sent", sequence: 3 } }),
-      prisma.lead.count({ where: { replyStatus: "Yes" } }),
-      prisma.senderAccount.findMany({ orderBy: { createdAt: "asc" } }),
-    ]);
+  const [
+    totalLeadsScraped,
+    qualifiedLeads,
+    totalSent,
+    failedSends,
+    followup1Sent,
+    followup2Sent,
+    replyCount,
+    accounts,
+  ] = await Promise.all([
+    prisma.lead.count(),
+    prisma.lead.count({ where: QUALIFIED_LEAD_WHERE }),
+    prisma.emailSend.count({ where: { status: "sent" } }),
+    prisma.emailSend.count({ where: { status: "failed" } }),
+    prisma.emailSend.count({ where: { status: "sent", sequence: 2 } }),
+    prisma.emailSend.count({ where: { status: "sent", sequence: 3 } }),
+    prisma.lead.count({ where: { replyStatus: "Yes" } }),
+    prisma.senderAccount.findMany({ orderBy: { createdAt: "asc" } }),
+  ]);
 
   const perSender = await Promise.all(
     accounts.map(async (account) => {
@@ -39,8 +50,10 @@ export async function GET() {
 
   return NextResponse.json({
     totalLeadsScraped,
+    qualifiedLeads,
     totalSent,
     successfulSends: totalSent,
+    failedSends,
     followup1Sent,
     followup2Sent,
     replyCount,
