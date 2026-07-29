@@ -59,7 +59,8 @@ export function CreateCampaignButton() {
           <h2 className="text-lg font-semibold text-[var(--ink)]">Create Campaign</h2>
           <p className="mt-1 text-sm text-[var(--ink-soft)]">
             Pulls fresh qualified leads (never used in a campaign before), hottest fit-score
-            first, and assigns them evenly across your active Gmail accounts.
+            first, and assigns them evenly across your active Gmail accounts. You&apos;ll write
+            the emails on the campaign&apos;s own page after reviewing the list.
           </p>
         </div>
         <div className="space-y-1.5">
@@ -75,7 +76,7 @@ export function CreateCampaignButton() {
             {availableCount === null
               ? "Checking how many fresh leads are available…"
               : availableCount === 0
-                ? "No fresh qualified leads available right now — enrich or draft more first."
+                ? "No fresh qualified leads available right now — enrich more first."
                 : `${availableCount} fresh qualified lead${availableCount === 1 ? "" : "s"} available.`}
           </p>
           {requestingMoreThanAvailable && (

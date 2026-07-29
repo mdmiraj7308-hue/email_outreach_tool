@@ -4,7 +4,7 @@ import { prisma } from "@/lib/prisma";
 import { RunStatusPoller } from "@/components/RunStatusPoller";
 import { ScrapeProgressBar } from "@/components/ScrapeProgressBar";
 import { EnrichRunButton } from "@/components/EnrichRunButton";
-import { WriteEmailsAndUploadButton } from "@/components/WriteEmailsAndUploadButton";
+import { UpdateSheetButton } from "@/components/UpdateSheetButton";
 import { statusBadgeClass, fitBadge, emailDeliverabilityBadge, badgeClass } from "@/lib/ui";
 import { LEAD_FILTER_MIN_FIT_SCORE } from "@/lib/constants";
 import { QUALIFIED_LEAD_WHERE, getDuplicateEmailLeadIds } from "@/lib/leadQualification";
@@ -102,7 +102,7 @@ export default async function RunDetailPage({
             {LEAD_FILTER_MIN_FIT_SCORE}
           </Link>
         </div>
-        {qualifiedOnly && <WriteEmailsAndUploadButton campaignRunId={run.id} />}
+        {qualifiedOnly && <UpdateSheetButton campaignRunId={run.id} />}
       </div>
 
       {visibleLeads.length === 0 ? (

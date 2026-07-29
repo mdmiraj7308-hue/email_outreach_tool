@@ -60,7 +60,7 @@ export function SendingCampaignView({
   initialLeads: CampaignLead[];
 }) {
   const router = useRouter();
-  const [leads] = useState(initialLeads);
+  const [leads, setLeads] = useState(initialLeads);
   const [expanded, setExpanded] = useState<string | null>(null);
   const [openSequence, setOpenSequence] = useState<Record<string, number>>({});
   const [toEdits, setToEdits] = useState<Record<string, string>>({});
@@ -72,8 +72,11 @@ export function SendingCampaignView({
   const [rewriteFeedback, setRewriteFeedback] = useState<Record<string, string>>({});
   const [rewriting, setRewriting] = useState<string | null>(null);
   const [rewriteMessage, setRewriteMessage] = useState<Record<string, string>>({});
+  const [writingAll, setWritingAll] = useState(false);
+  const [writeAllMessage, setWriteAllMessage] = useState<string | null>(null);
 
   const isDraftStatus = status === "draft";
+  const undraftedCount = leads.filter((l) => l.drafts.length < 3).length;
 
   function currentTo(lead: CampaignLead): string {
     return toEdits[lead.leadId] ?? lead.primaryEmail;
@@ -154,6 +157,39 @@ export function SendingCampaignView({
     }
   }
 
+  async function handleWriteAll() {
+    setWritingAll(true);
+    setWriteAllMessage(null);
+    try {
+      const res = await fetch(`/api/sending-campaigns/${campaignId}/write-emails`, { method: "POST" });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error ?? "Failed to write emails");
+
+      const results = data.results as {
+        leadId: string;
+        ok: boolean;
+        drafts?: Draft[];
+        error?: string;
+      }[];
+      setLeads((prev) =>
+        prev.map((lead) => {
+          const r = results.find((x) => x.leadId === lead.leadId);
+          return r?.ok && r.drafts ? { ...lead, drafts: r.drafts } : lead;
+        })
+      );
+      const failedCount = results.filter((r) => !r.ok).length;
+      setWriteAllMessage(
+        failedCount > 0
+          ? `Wrote emails for ${results.length - failedCount}/${results.length} leads — ${failedCount} failed.`
+          : `Wrote emails for all ${results.length} leads.`
+      );
+    } catch (err) {
+      setWriteAllMessage(err instanceof Error ? `Error: ${err.message}` : "Failed to write emails");
+    } finally {
+      setWritingAll(false);
+    }
+  }
+
   async function handleConfirm() {
     setConfirming(true);
     setConfirmMessage(null);
@@ -177,20 +213,34 @@ export function SendingCampaignView({
           {leads.length} lead{leads.length === 1 ? "" : "s"} in this campaign
         </p>
         {isDraftStatus ? (
-          <button onClick={handleConfirm} disabled={confirming} className={btnPrimary}>
-            {confirming ? "Confirming…" : "Confirm & Schedule"}
-          </button>
+          <div className="flex items-center gap-2">
+            <button onClick={handleWriteAll} disabled={writingAll} className={btnSecondary}>
+              {writingAll ? "Writing…" : "Write emails + 2 follow-ups"}
+            </button>
+            <button
+              onClick={handleConfirm}
+              disabled={confirming || undraftedCount > 0}
+              title={undraftedCount > 0 ? "Write emails for every lead first" : undefined}
+              className={btnPrimary}
+            >
+              {confirming ? "Confirming…" : "Confirm & Schedule"}
+            </button>
+          </div>
         ) : (
           <span className={badgeClass("green")}>{status}</span>
         )}
       </div>
       {isDraftStatus && (
         <p className="text-xs text-[var(--ink-soft)]">
-          Review and edit every email below. Nothing is scheduled until you click Confirm &
-          Schedule — sending then happens automatically within business hours, paced across your
-          connected accounts.
+          Audit the list below, click Write emails + 2 follow-ups to draft the cold email and both
+          follow-ups for every lead, then review/edit before confirming. Nothing is scheduled
+          until you click Confirm & Schedule — sending then happens automatically within business
+          hours, paced across your connected accounts.
+          {undraftedCount > 0 &&
+            ` ${undraftedCount} of ${leads.length} lead${undraftedCount === 1 ? "" : "s"} still need${undraftedCount === 1 ? "s" : ""} emails written.`}
         </p>
       )}
+      {writeAllMessage && <p className="text-sm text-[var(--ink-soft)]">{writeAllMessage}</p>}
       {confirmMessage && <p className="text-sm text-[var(--ink-soft)]">{confirmMessage}</p>}
 
       <div className="space-y-3">
@@ -241,11 +291,12 @@ export function SendingCampaignView({
                   {isDraftStatus && (
                     <div className="space-y-1.5 rounded-xl border border-[var(--border)] p-3">
                       <label className="text-xs font-medium uppercase tracking-wide text-[var(--ink-soft)]">
-                        Rewrite (cold email + both follow-ups)
+                        {lead.drafts.length > 0 ? "Rewrite (cold email + both follow-ups)" : "Write emails for just this lead"}
                       </label>
                       <p className="text-xs text-[var(--ink-soft)]">
-                        Regenerates all 3 emails using your Settings email instructions and this
-                        lead&apos;s business summary, plus any feedback you add below.
+                        {lead.drafts.length > 0
+                          ? "Regenerates all 3 emails using your Settings email instructions and this lead's business summary, plus any feedback you add below."
+                          : "Drafts all 3 emails using your Settings email instructions and this lead's business summary — same as the bulk button above, just for this one lead."}
                       </p>
                       <textarea
                         value={rewriteFeedback[lead.leadId] ?? ""}
@@ -262,7 +313,11 @@ export function SendingCampaignView({
                         disabled={rewriting === lead.leadId}
                         className={btnSecondary}
                       >
-                        {rewriting === lead.leadId ? "Rewriting…" : "Rewrite"}
+                        {rewriting === lead.leadId
+                          ? "Writing…"
+                          : lead.drafts.length > 0
+                            ? "Rewrite"
+                            : "Write"}
                       </button>
                       {rewriteMessage[lead.leadId] && (
                         <p className="text-sm text-[var(--ink-soft)]">{rewriteMessage[lead.leadId]}</p>
@@ -270,24 +325,30 @@ export function SendingCampaignView({
                     </div>
                   )}
 
-                  <div className="flex gap-2">
-                    {lead.drafts.map((d) => (
-                      <button
-                        key={d.id}
-                        type="button"
-                        onClick={() => setOpenSequence((prev) => ({ ...prev, [lead.leadId]: d.sequence }))}
-                        className={`rounded-full px-4 py-1.5 text-sm font-medium transition ${
-                          activeSequence === d.sequence
-                            ? "bg-[var(--brand)] text-white"
-                            : "border border-[var(--border)] text-[var(--ink-soft)] hover:bg-neutral-50"
-                        }`}
-                      >
-                        {SEQUENCE_LABEL[d.sequence] ?? `Sequence ${d.sequence}`}
-                      </button>
-                    ))}
-                  </div>
+                  {lead.drafts.length === 0 ? (
+                    <p className="text-sm text-[var(--ink-soft)]">
+                      No emails drafted yet for this lead.
+                    </p>
+                  ) : (
+                    <>
+                      <div className="flex gap-2">
+                        {lead.drafts.map((d) => (
+                          <button
+                            key={d.id}
+                            type="button"
+                            onClick={() => setOpenSequence((prev) => ({ ...prev, [lead.leadId]: d.sequence }))}
+                            className={`rounded-full px-4 py-1.5 text-sm font-medium transition ${
+                              activeSequence === d.sequence
+                                ? "bg-[var(--brand)] text-white"
+                                : "border border-[var(--border)] text-[var(--ink-soft)] hover:bg-neutral-50"
+                            }`}
+                          >
+                            {SEQUENCE_LABEL[d.sequence] ?? `Sequence ${d.sequence}`}
+                          </button>
+                        ))}
+                      </div>
 
-                  {activeDraft && activeEdit && (
+                      {activeDraft && activeEdit && (
                     <>
                       <div className="space-y-1.5">
                         <label className="text-xs font-medium uppercase tracking-wide text-[var(--ink-soft)]">
@@ -322,6 +383,8 @@ export function SendingCampaignView({
                           className="w-full rounded-xl border border-[var(--border)] px-3.5 py-2.5 font-mono text-sm text-[var(--ink)] outline-none transition focus:border-[var(--brand)] focus:ring-2 focus:ring-[var(--brand-light)] disabled:bg-neutral-50"
                         />
                       </div>
+                    </>
+                  )}
                     </>
                   )}
 

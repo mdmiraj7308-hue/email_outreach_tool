@@ -5,22 +5,18 @@ import { nextBusinessSlot, nextBusinessDayAfter } from "@/lib/businessHours";
 import { format, startOfDay, endOfDay } from "date-fns";
 
 /**
- * The global "fresh" pool: qualified, fully-drafted leads that have never
- * been part of any sending campaign before (draft or confirmed) — no extra
- * flag needed, membership in SendingCampaignLead IS the "already used"
- * marker. Hottest (highest fit score) first, oldest as tiebreak.
+ * The global "fresh" pool: qualified leads that have never been part of any
+ * sending campaign before (draft or confirmed) — no extra flag needed,
+ * membership in SendingCampaignLead IS the "already used" marker. Hottest
+ * (highest fit score) first, oldest as tiebreak. Drafts are NOT required to
+ * already exist here — a campaign can be created first, audited, then
+ * drafted via the "Write emails + 2 follow-ups" action on its own page.
  */
 async function getFreshLeadCandidates() {
   const candidates = await prisma.lead.findMany({
     where: {
       ...QUALIFIED_LEAD_WHERE,
       sendingCampaignLeads: { none: {} },
-      emailDrafts: { some: { sequence: 1 } },
-      AND: [
-        ...(Array.isArray(QUALIFIED_LEAD_WHERE.AND) ? QUALIFIED_LEAD_WHERE.AND : []),
-        { emailDrafts: { some: { sequence: 2 } } },
-        { emailDrafts: { some: { sequence: 3 } } },
-      ],
     },
     select: { id: true, primaryEmail: true, fitScore: true, createdAt: true },
     orderBy: [{ fitScore: "desc" }, { createdAt: "asc" }],
@@ -127,6 +123,28 @@ export async function confirmSendingCampaign(
   if (!campaign) return { ok: false, error: "Campaign not found" };
   if (campaign.status !== "draft") return { ok: false, error: `Campaign is already ${campaign.status}` };
 
+  // Drafts are no longer guaranteed to exist by the time a campaign is
+  // created (see getFreshLeadCandidates) — writing them now happens via a
+  // separate "Write emails + 2 follow-ups" action on this campaign's own
+  // page, after the lead list has been audited. Block confirming outright
+  // if any lead hasn't been drafted yet, rather than silently skipping it —
+  // a silently-skipped lead would be stranded in a confirmed campaign with
+  // no draft and no way to ever send or remove it individually.
+  const leadIds = campaign.leads.map((l) => l.leadId);
+  const draftCounts = await prisma.emailDraft.groupBy({
+    by: ["leadId"],
+    where: { leadId: { in: leadIds } },
+    _count: { _all: true },
+  });
+  const fullyDraftedLeadIds = new Set(draftCounts.filter((d) => d._count._all >= 3).map((d) => d.leadId));
+  const missingDraftsCount = leadIds.filter((id) => !fullyDraftedLeadIds.has(id)).length;
+  if (missingDraftsCount > 0) {
+    return {
+      ok: false,
+      error: `${missingDraftsCount} lead${missingDraftsCount === 1 ? "" : "s"} still need${missingDraftsCount === 1 ? "s" : ""} emails written — click "Write emails + 2 follow-ups" first.`,
+    };
+  }
+
   const settings = await getSettings();
   const startHour = settings.businessHoursStartHour;
   const endHour = settings.businessHoursEndHour;
@@ -168,7 +186,7 @@ export async function confirmSendingCampaign(
     const draft = await prisma.emailDraft.findUnique({
       where: { leadId_sequence: { leadId: campaignLead.leadId, sequence: 1 } },
     });
-    if (!draft) continue; // shouldn't happen (pool required all 3 drafts), skip defensively
+    if (!draft) continue; // guarded above — unreachable, kept as a defensive fallback
 
     const existingSend = await prisma.emailSend.findUnique({ where: { emailDraftId: draft.id } });
     if (existingSend) continue; // already scheduled/sent somehow — don't double-create
