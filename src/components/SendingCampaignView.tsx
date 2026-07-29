@@ -28,6 +28,28 @@ interface DraftEdit {
   body: string;
 }
 
+function CopyButton({ text, label }: { text: string; label: string }) {
+  const [copied, setCopied] = useState(false);
+
+  async function handleCopy(e: React.MouseEvent) {
+    e.stopPropagation();
+    await navigator.clipboard.writeText(text);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 1500);
+  }
+
+  return (
+    <button
+      type="button"
+      onClick={handleCopy}
+      title={`Copy ${label}`}
+      className="shrink-0 rounded-md border border-[var(--border)] px-2 py-0.5 text-xs text-[var(--ink-soft)] transition hover:bg-neutral-50"
+    >
+      {copied ? "Copied" : "Copy"}
+    </button>
+  );
+}
+
 export function SendingCampaignView({
   campaignId,
   status,
@@ -147,19 +169,25 @@ export function SendingCampaignView({
 
           return (
             <div key={lead.leadId} className={card}>
-              <button
+              <div
                 onClick={() => setExpanded(isOpen ? null : lead.leadId)}
-                className="flex w-full items-center justify-between text-left"
+                className="flex w-full cursor-pointer items-center justify-between text-left"
               >
                 <div>
                   <p className="font-medium text-[var(--ink)]">{lead.businessName}</p>
-                  <p className="text-sm text-[var(--ink-soft)]">{lead.primaryEmail}</p>
+                  <div className="mt-0.5 flex items-center gap-2">
+                    <p className="text-sm text-[var(--ink-soft)]">{lead.primaryEmail}</p>
+                    <CopyButton text={lead.primaryEmail} label="email address" />
+                  </div>
                 </div>
-                <span className="text-sm text-[var(--ink-soft)]">via {lead.senderEmail}</span>
-              </button>
+                <span className="shrink-0 text-sm text-[var(--ink-soft)]">via {lead.senderEmail}</span>
+              </div>
 
               {lead.aboutSummary && (
-                <p className="mt-2 text-sm text-[var(--ink-soft)]">{lead.aboutSummary}</p>
+                <div className="mt-2 flex items-start gap-2">
+                  <p className="flex-1 text-sm text-[var(--ink-soft)]">{lead.aboutSummary}</p>
+                  <CopyButton text={lead.aboutSummary} label="summary" />
+                </div>
               )}
 
               {isOpen && (
