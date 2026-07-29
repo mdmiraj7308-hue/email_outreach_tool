@@ -55,6 +55,24 @@ function zonedTimeToUtc(year: number, month: number, day: number, hour: number, 
  * never bumped, since that's a deliberate human decision.
  */
 export function nextBusinessSlot(from: Date, startHour: number, endHour: number, timeZone: string): Date {
+  const result = computeNextBusinessSlot(from, startHour, endHour, timeZone);
+  // Cheap self-check: a caller passing a corrupted/empty timeZone or hour
+  // (e.g. Settings holding a stale value) should never silently produce a
+  // "business hours" slot that isn't actually within business hours — log
+  // it loudly instead, since that failure mode (a real send going out at
+  // 2am) is otherwise invisible until someone notices in their inbox.
+  const parts = getZonedParts(result, timeZone);
+  const inWindow = parts.weekday !== 0 && parts.weekday !== 6 && parts.hour >= startHour && parts.hour < endHour;
+  if (!inWindow) {
+    console.error(
+      `[businessHours] nextBusinessSlot computed ${result.toISOString()} which is NOT within business hours ` +
+        `(startHour=${startHour}, endHour=${endHour}, timeZone="${timeZone}") — resolved local weekday=${parts.weekday} hour=${parts.hour}`
+    );
+  }
+  return result;
+}
+
+function computeNextBusinessSlot(from: Date, startHour: number, endHour: number, timeZone: string): Date {
   for (let dayOffset = 0; dayOffset < 14; dayOffset++) {
     const probe = new Date(from.getTime() + dayOffset * 24 * 60 * 60 * 1000);
     const parts = getZonedParts(probe, timeZone);

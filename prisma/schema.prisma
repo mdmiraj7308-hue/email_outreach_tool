@@ -74,6 +74,15 @@ model Settings {
   followupPauseMinSeconds  Int @default(5)
   followupPauseMaxSeconds  Int @default(100)
 
+  // Cooldown gate for the dispatch loop: runDueFollowups sends at most one
+  // email per cron tick and won't send another until now >= this. Persisted
+  // (rather than an in-process sleep) because each cron tick is a brand-new
+  // Vercel serverless invocation with a hard execution time limit far
+  // shorter than the pause range above — an in-process sleep would just get
+  // killed mid-wait, which is exactly what was happening before this field
+  // existed.
+  nextFollowupDispatchAt DateTime?
+
   // Local heuristic spam-risk gate applied before every send.
   spamScoreThreshold Int    @default(70) // 0-100, higher = worse; >= this blocks/warns
   spamScoreAction    String @default("block") // "block" | "warn"

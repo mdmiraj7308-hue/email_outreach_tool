@@ -4,10 +4,6 @@ import { pickAccountAndSend, pickAccountAndSendPinned } from "@/lib/gmail/sendQu
 import { nextBusinessSlot } from "@/lib/businessHours";
 import type { Settings } from "@/generated/prisma/client";
 
-function sleep(ms: number) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
 // Sequence-1 sends use a wider pause range than follow-ups, both configurable
 // in Settings (defaults: 5-120s first email, 5-100s follow-ups).
 function randomPauseMs(settings: Settings, sequence: number): number {
@@ -20,62 +16,83 @@ function randomPauseMs(settings: Settings, sequence: number): number {
 }
 
 /**
- * Dispatches everything due (EmailSend rows with status "scheduled" and
- * scheduledFor <= now), oldest first, strictly sequentially so the random
- * 0-180s pause between sends is honored across the whole queue — not just
- * within one lead's sequence. All durable state lives in EmailSend, so a
- * crash/restart just re-runs this and picks up whatever's still due.
+ * Dispatches at most ONE due EmailSend (status "scheduled", scheduledFor <=
+ * now, oldest first) per call, gated by Settings.nextFollowupDispatchAt so
+ * consecutive sends are still spaced by the randomized pause — across the
+ * whole queue, not just within one lead's sequence, same as before.
+ *
+ * This used to send everything due in one loop with `await sleep(60-500s)`
+ * between each. That relied on the process staying alive for the full pause,
+ * which doesn't hold on Vercel: `/api/cron/tick` is a fresh serverless
+ * invocation every time cron-job.org hits it (~once/minute), and Vercel
+ * kills any invocation that runs long before a 60-500s sleep could ever
+ * finish. In production this meant only the first send of a batch actually
+ * went out from the pause logic — every send after it was really just
+ * whatever the next cron tick happened to pick up, spaced by the external
+ * cron interval instead of the configured random range.
+ *
+ * Persisting the "not before" timestamp instead means each tick either
+ * finds it's too soon and does nothing, or finds it's clear and sends
+ * exactly one thing — no in-process waiting required, so nothing can be
+ * killed mid-pause. The tradeoff: real-world spacing can't be finer than
+ * the external cron interval even if the random pause rolls shorter.
  */
 export async function runDueFollowups(): Promise<void> {
-  const due = await prisma.emailSend.findMany({
+  const settings = await getSettings();
+  if (settings.nextFollowupDispatchAt && settings.nextFollowupDispatchAt.getTime() > Date.now()) {
+    return; // still cooling down from the last dispatch — try again next tick
+  }
+
+  const send = await prisma.emailSend.findFirst({
     where: { status: "scheduled", scheduledFor: { lte: new Date() } },
     orderBy: { scheduledFor: "asc" },
   });
-  const settings = await getSettings();
+  if (!send) return;
 
-  for (let i = 0; i < due.length; i++) {
-    const send = due[i];
-
-    const lead = await prisma.lead.findUnique({ where: { id: send.leadId } });
-    if (lead?.replyStatus === "Yes") {
-      await prisma.emailSend.update({
-        where: { id: send.id },
-        data: { status: "skipped_reply" },
-      });
-      await logJobRun("followup", send.id, "success", "skipped: lead already replied");
-      continue;
-    }
-
-    let outcome;
-    try {
-      outcome = send.sequence > 1
-        ? await pickAccountAndSendPinned(send.id)
-        : await pickAccountAndSend(send.id);
-    } catch (err) {
-      const message = err instanceof Error ? err.message : "unexpected error";
-      console.error(`[followupJob] send ${send.id} threw unexpectedly`, err);
-      await prisma.emailSend
-        .update({ where: { id: send.id }, data: { status: "failed", errorMessage: message } })
-        .catch(() => {});
-      await logJobRun("followup", send.id, "failed", message);
-      continue;
-    }
-
-    if (outcome.status === "sent") {
-      await logJobRun("followup", send.id, "success", `sent via ${outcome.senderEmail}`);
-      await scheduleNextFollowup(send.leadId, send.sequence);
-    } else if (outcome.status === "deferred") {
-      await logJobRun("followup", send.id, "success", `deferred: ${outcome.reason}`);
-      // Left as "scheduled" — will be retried on a later tick once caps free up.
-    } else {
-      await logJobRun("followup", send.id, "failed", outcome.error);
-    }
-
-    const isLast = i === due.length - 1;
-    if (!isLast) {
-      await sleep(randomPauseMs(settings, send.sequence));
-    }
+  const lead = await prisma.lead.findUnique({ where: { id: send.leadId } });
+  if (lead?.replyStatus === "Yes") {
+    await prisma.emailSend.update({
+      where: { id: send.id },
+      data: { status: "skipped_reply" },
+    });
+    await logJobRun("followup", send.id, "success", "skipped: lead already replied");
+    return; // not a real send attempt — doesn't consume a pause slot
   }
+
+  let outcome;
+  try {
+    outcome = send.sequence > 1
+      ? await pickAccountAndSendPinned(send.id)
+      : await pickAccountAndSend(send.id);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : "unexpected error";
+    console.error(`[followupJob] send ${send.id} threw unexpectedly`, err);
+    await prisma.emailSend
+      .update({ where: { id: send.id }, data: { status: "failed", errorMessage: message } })
+      .catch(() => {});
+    await logJobRun("followup", send.id, "failed", message);
+    await armNextDispatchGate(settings, send.sequence);
+    return;
+  }
+
+  if (outcome.status === "sent") {
+    await logJobRun("followup", send.id, "success", `sent via ${outcome.senderEmail}`);
+    await scheduleNextFollowup(send.leadId, send.sequence);
+  } else if (outcome.status === "deferred") {
+    await logJobRun("followup", send.id, "success", `deferred: ${outcome.reason}`);
+    // Left as "scheduled" — will be retried on a later tick once caps free up.
+  } else {
+    await logJobRun("followup", send.id, "failed", outcome.error);
+  }
+
+  await armNextDispatchGate(settings, send.sequence);
+}
+
+async function armNextDispatchGate(settings: Settings, sequence: number): Promise<void> {
+  await prisma.settings.update({
+    where: { id: 1 },
+    data: { nextFollowupDispatchAt: new Date(Date.now() + randomPauseMs(settings, sequence)) },
+  });
 }
 
 async function scheduleNextFollowup(leadId: string, justSentSequence: number) {
