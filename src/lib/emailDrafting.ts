@@ -99,3 +99,23 @@ export async function writeEmailsForLead(
     return { ok: false, error: message };
   }
 }
+
+/**
+ * Re-drafts all 3 sequence emails for a lead, combining the standing
+ * Settings email instructions with one-off feedback for this rewrite —
+ * unlike passing feedback as writeEmailsForLead's customSystemPrompt
+ * directly, which would replace the Settings instructions rather than add
+ * to them.
+ */
+export async function rewriteEmailsForLead(leadId: string, feedback: string): Promise<WriteEmailsResult> {
+  const settings = await getSettings();
+  const baseInstructions = settings.emailSystemPromptOverride?.trim() || "";
+  const feedbackTrimmed = feedback.trim();
+  const combined = [
+    baseInstructions,
+    feedbackTrimmed ? `Feedback on the previous draft — apply this to the rewrite:\n${feedbackTrimmed}` : null,
+  ]
+    .filter(Boolean)
+    .join("\n\n");
+  return writeEmailsForLead(leadId, combined || null);
+}

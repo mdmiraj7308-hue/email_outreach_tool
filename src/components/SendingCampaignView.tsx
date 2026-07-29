@@ -69,6 +69,9 @@ export function SendingCampaignView({
   const [saveMessage, setSaveMessage] = useState<Record<string, string>>({});
   const [confirming, setConfirming] = useState(false);
   const [confirmMessage, setConfirmMessage] = useState<string | null>(null);
+  const [rewriteFeedback, setRewriteFeedback] = useState<Record<string, string>>({});
+  const [rewriting, setRewriting] = useState<string | null>(null);
+  const [rewriteMessage, setRewriteMessage] = useState<Record<string, string>>({});
 
   const isDraftStatus = status === "draft";
 
@@ -117,6 +120,37 @@ export function SendingCampaignView({
       }));
     } finally {
       setSaving(null);
+    }
+  }
+
+  async function handleRewrite(lead: CampaignLead) {
+    setRewriting(lead.leadId);
+    setRewriteMessage((prev) => ({ ...prev, [lead.leadId]: "" }));
+    try {
+      const res = await fetch(`/api/leads/${lead.leadId}/rewrite-emails`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ feedback: rewriteFeedback[lead.leadId] ?? "" }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error ?? "Failed to rewrite");
+
+      const newDrafts = data.drafts as { id: string; subject: string; body: string }[];
+      setDraftEdits((prev) => {
+        const next = { ...prev };
+        for (const d of newDrafts) {
+          next[d.id] = { subject: d.subject, body: d.body };
+        }
+        return next;
+      });
+      setRewriteMessage((prev) => ({ ...prev, [lead.leadId]: "Rewritten — review the cold email and both follow-ups below." }));
+    } catch (err) {
+      setRewriteMessage((prev) => ({
+        ...prev,
+        [lead.leadId]: err instanceof Error ? `Error: ${err.message}` : "Failed to rewrite",
+      }));
+    } finally {
+      setRewriting(null);
     }
   }
 
@@ -203,6 +237,38 @@ export function SendingCampaignView({
                       className="w-full rounded-xl border border-[var(--border)] px-3.5 py-2.5 text-sm text-[var(--ink)] outline-none transition focus:border-[var(--brand)] focus:ring-2 focus:ring-[var(--brand-light)] disabled:bg-neutral-50"
                     />
                   </div>
+
+                  {isDraftStatus && (
+                    <div className="space-y-1.5 rounded-xl border border-[var(--border)] p-3">
+                      <label className="text-xs font-medium uppercase tracking-wide text-[var(--ink-soft)]">
+                        Rewrite (cold email + both follow-ups)
+                      </label>
+                      <p className="text-xs text-[var(--ink-soft)]">
+                        Regenerates all 3 emails using your Settings email instructions and this
+                        lead&apos;s business summary, plus any feedback you add below.
+                      </p>
+                      <textarea
+                        value={rewriteFeedback[lead.leadId] ?? ""}
+                        onChange={(e) =>
+                          setRewriteFeedback((prev) => ({ ...prev, [lead.leadId]: e.target.value }))
+                        }
+                        placeholder={`Optional feedback, e.g. "shorter", "don't mention automation", "more casual tone"…`}
+                        rows={2}
+                        className="w-full rounded-xl border border-[var(--border)] px-3.5 py-2.5 text-sm text-[var(--ink)] outline-none transition focus:border-[var(--brand)] focus:ring-2 focus:ring-[var(--brand-light)]"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => handleRewrite(lead)}
+                        disabled={rewriting === lead.leadId}
+                        className={btnSecondary}
+                      >
+                        {rewriting === lead.leadId ? "Rewriting…" : "Rewrite"}
+                      </button>
+                      {rewriteMessage[lead.leadId] && (
+                        <p className="text-sm text-[var(--ink-soft)]">{rewriteMessage[lead.leadId]}</p>
+                      )}
+                    </div>
+                  )}
 
                   <div className="flex gap-2">
                     {lead.drafts.map((d) => (
