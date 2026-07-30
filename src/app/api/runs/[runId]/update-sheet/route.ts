@@ -20,11 +20,25 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ run
 
   let updated = 0;
   let failed = 0;
+  let firstError: string | undefined;
   for (const lead of leads) {
-    const result = await syncLeadToSheet(lead.id).catch(() => ({ ok: false as const }));
-    if (result.ok) updated++;
-    else failed++;
+    const result = await syncLeadToSheet(lead.id).catch((err) => ({
+      ok: false as const,
+      reason: "sheets_api_error" as const,
+      error: err instanceof Error ? err.message : "Unknown error",
+    }));
+    if (result.ok) {
+      updated++;
+    } else {
+      failed++;
+      if (!firstError) {
+        firstError =
+          result.reason === "not_configured"
+            ? "Google Sheets is not configured in Settings."
+            : (result.error ?? result.reason);
+      }
+    }
   }
 
-  return NextResponse.json({ updated, failed });
+  return NextResponse.json({ updated, failed, firstError });
 }

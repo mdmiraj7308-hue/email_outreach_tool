@@ -13,7 +13,7 @@ import { btnPrimary } from "@/lib/ui";
 export function UpdateSheetButton({ campaignRunId }: { campaignRunId: string }) {
   const router = useRouter();
   const [running, setRunning] = useState(false);
-  const [result, setResult] = useState<{ updated: number; failed: number } | null>(null);
+  const [result, setResult] = useState<{ updated: number; failed: number; firstError?: string } | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   async function handleRun() {
@@ -24,7 +24,7 @@ export function UpdateSheetButton({ campaignRunId }: { campaignRunId: string }) 
       const res = await fetch(`/api/runs/${campaignRunId}/update-sheet`, { method: "POST" });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error ?? "Failed to update sheet");
-      setResult({ updated: data.updated, failed: data.failed });
+      setResult({ updated: data.updated, failed: data.failed, firstError: data.firstError });
       router.refresh();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to update sheet");
@@ -46,6 +46,9 @@ export function UpdateSheetButton({ campaignRunId }: { campaignRunId: string }) 
           {running ? "Updating…" : "Update Sheet"}
         </button>
       </div>
+      {result && result.failed > 0 && result.firstError && (
+        <span className="max-w-md text-right text-sm text-red-600">{result.firstError}</span>
+      )}
       {error && <span className="text-sm text-red-600">{error}</span>}
     </div>
   );
