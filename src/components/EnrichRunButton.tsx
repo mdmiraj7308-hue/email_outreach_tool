@@ -7,7 +7,7 @@ import { btnSecondary } from "@/lib/ui";
 interface Progress {
   campaignRunStatus: string | null;
   totalLeads: number;
-  enrichNotDone: number;
+  enrichRemaining: number;
   enrichDone: number;
   enrichFailed: number;
   qualifiedTotal: number;
@@ -18,6 +18,16 @@ async function fetchProgress(campaignRunId: string): Promise<Progress> {
   const res = await fetch(`/api/runs/${campaignRunId}/progress`);
   if (!res.ok) throw new Error("Failed to fetch progress");
   return res.json();
+}
+
+// Absolute progress against the run's fixed total — not "how much changed
+// since this page loaded". A per-session baseline meant every refresh reset
+// the reference point back to 0%, making a run that was genuinely most of
+// the way done look like it had just started.
+function percentFor(progress: Progress): number {
+  if (progress.totalLeads === 0) return 100;
+  const completed = progress.totalLeads - progress.enrichRemaining;
+  return Math.min(100, Math.max(0, Math.round((completed / progress.totalLeads) * 100)));
 }
 
 export function EnrichRunButton({ campaignRunId }: { campaignRunId: string }) {
@@ -37,13 +47,14 @@ export function EnrichRunButton({ campaignRunId }: { campaignRunId: string }) {
 
   // If the page loads (or reloads) while a previous click's enrichment is
   // still being drained by the cron tick in the background, resume showing
-  // progress instead of looking idle.
+  // progress instead of looking idle or reset.
   useEffect(() => {
     let cancelled = false;
     fetchProgress(campaignRunId)
       .then((progress) => {
         if (!cancelled && progress.campaignRunStatus === "enriching") {
-          void pollUntilDone(progress.enrichNotDone);
+          setPercent(percentFor(progress));
+          void pollUntilDone();
         }
       })
       .catch(() => {});
@@ -57,24 +68,16 @@ export function EnrichRunButton({ campaignRunId }: { campaignRunId: string }) {
   /**
    * Polls progress until the run leaves "enriching". The actual enrichment
    * work happens in bounded batches driven by the cron tick (or the local
-   * dev scheduler) in the background — a single request enriching every
-   * pending lead synchronously used to reliably exceed Vercel's function
-   * time limit on any run with more than a handful of leads left,
-   * surfacing as a non-JSON timeout page the client couldn't parse
-   * ("Unexpected token 'A'..."). This function only ever watches progress;
-   * it never does the enrichment work itself.
+   * dev scheduler) in the background — this function only ever watches
+   * progress; it never does the enrichment work itself.
    */
-  function pollUntilDone(baseline: number): Promise<void> {
+  function pollUntilDone(): Promise<void> {
     setRunning(true);
-    setPercent(baseline > 0 ? 0 : 100);
     return new Promise((resolve) => {
       pollRef.current = setInterval(async () => {
         try {
           const progress = await fetchProgress(campaignRunId);
-          if (baseline > 0) {
-            const completedSoFar = Math.max(0, baseline - progress.enrichNotDone);
-            setPercent(Math.min(99, Math.round((completedSoFar / baseline) * 100)));
-          }
+          setPercent(percentFor(progress));
           if (progress.campaignRunStatus !== "enriching") {
             stopPolling();
             setPercent(100);
@@ -94,10 +97,10 @@ export function EnrichRunButton({ campaignRunId }: { campaignRunId: string }) {
     setRunning(true);
     setResult(null);
     setError(null);
-    setPercent(0);
 
     try {
-      const baseline = (await fetchProgress(campaignRunId)).enrichNotDone;
+      const initial = await fetchProgress(campaignRunId);
+      setPercent(percentFor(initial));
 
       const res = await fetch("/api/enrich", {
         method: "POST",
@@ -109,12 +112,12 @@ export function EnrichRunButton({ campaignRunId }: { campaignRunId: string }) {
 
       if (data.attempted === 0) {
         setPercent(100);
-        setResult({ succeeded: 0, failed: 0 });
+        setResult({ succeeded: initial.enrichDone, failed: initial.enrichFailed });
         setRunning(false);
         return;
       }
 
-      await pollUntilDone(baseline);
+      await pollUntilDone();
     } catch (err) {
       stopPolling();
       setError(err instanceof Error ? err.message : "Enrichment failed");

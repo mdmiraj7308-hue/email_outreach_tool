@@ -11,10 +11,17 @@ import { QUALIFIED_LEAD_WHERE } from "@/lib/leadQualification";
 export async function GET(_req: Request, { params }: { params: Promise<{ runId: string }> }) {
   const { runId } = await params;
 
-  const [run, totalLeads, enrichNotDone, enrichDone, enrichFailed, qualifiedTotal, qualifiedDrafted] =
+  const [run, totalLeads, enrichRemaining, enrichNotDone, enrichDone, enrichFailed, qualifiedTotal, qualifiedDrafted] =
     await Promise.all([
       prisma.campaignRun.findUnique({ where: { id: runId }, select: { status: true } }),
       prisma.lead.count({ where: { campaignRunId: runId } }),
+      // Matches pendingEnrichmentWhere in the pipeline exactly — only
+      // leads that haven't completed a full attempt yet (never tried, or
+      // interrupted mid-batch). "failed"/"unreachable" are terminal now,
+      // same as "done", so they're not counted as remaining.
+      prisma.lead.count({
+        where: { campaignRunId: runId, enrichmentStatus: { in: ["pending", "crawling", "summarizing"] } },
+      }),
       prisma.lead.count({
         where: { campaignRunId: runId, enrichmentStatus: { not: "done" } },
       }),
@@ -35,6 +42,7 @@ export async function GET(_req: Request, { params }: { params: Promise<{ runId: 
   return NextResponse.json({
     campaignRunStatus: run?.status ?? null,
     totalLeads,
+    enrichRemaining,
     enrichNotDone,
     enrichDone,
     enrichFailed,
