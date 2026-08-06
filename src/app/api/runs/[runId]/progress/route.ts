@@ -11,20 +11,34 @@ import { QUALIFIED_LEAD_WHERE } from "@/lib/leadQualification";
 export async function GET(_req: Request, { params }: { params: Promise<{ runId: string }> }) {
   const { runId } = await params;
 
-  const [totalLeads, enrichNotDone, qualifiedTotal, qualifiedDrafted] = await Promise.all([
-    prisma.lead.count({ where: { campaignRunId: runId } }),
-    prisma.lead.count({
-      where: { campaignRunId: runId, enrichmentStatus: { not: "done" } },
-    }),
-    prisma.lead.count({ where: { campaignRunId: runId, ...QUALIFIED_LEAD_WHERE } }),
-    prisma.lead.count({
-      where: {
-        campaignRunId: runId,
-        ...QUALIFIED_LEAD_WHERE,
-        emailDrafts: { some: {} },
-      },
-    }),
-  ]);
+  const [run, totalLeads, enrichNotDone, enrichDone, enrichFailed, qualifiedTotal, qualifiedDrafted] =
+    await Promise.all([
+      prisma.campaignRun.findUnique({ where: { id: runId }, select: { status: true } }),
+      prisma.lead.count({ where: { campaignRunId: runId } }),
+      prisma.lead.count({
+        where: { campaignRunId: runId, enrichmentStatus: { not: "done" } },
+      }),
+      prisma.lead.count({ where: { campaignRunId: runId, enrichmentStatus: "done" } }),
+      prisma.lead.count({
+        where: { campaignRunId: runId, enrichmentStatus: { in: ["failed", "unreachable"] } },
+      }),
+      prisma.lead.count({ where: { campaignRunId: runId, ...QUALIFIED_LEAD_WHERE } }),
+      prisma.lead.count({
+        where: {
+          campaignRunId: runId,
+          ...QUALIFIED_LEAD_WHERE,
+          emailDrafts: { some: {} },
+        },
+      }),
+    ]);
 
-  return NextResponse.json({ totalLeads, enrichNotDone, qualifiedTotal, qualifiedDrafted });
+  return NextResponse.json({
+    campaignRunStatus: run?.status ?? null,
+    totalLeads,
+    enrichNotDone,
+    enrichDone,
+    enrichFailed,
+    qualifiedTotal,
+    qualifiedDrafted,
+  });
 }

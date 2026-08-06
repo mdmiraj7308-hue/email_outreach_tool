@@ -3,6 +3,7 @@ import { runReplyChecks } from "@/lib/scheduler/jobs/replyCheckJob";
 import { runBounceChecks } from "@/lib/scheduler/jobs/bounceCheckJob";
 import { runApifyResetIfDue } from "@/lib/scheduler/jobs/apifyResetJob";
 import { advanceInProgressScrapes } from "@/lib/scrapeRun";
+import { advanceAllInProgressEnrichments } from "@/lib/enrichment/pipeline";
 import {
   FOLLOWUP_JOB_INTERVAL_MS,
   REPLY_CHECK_JOB_INTERVAL_MS,
@@ -19,6 +20,7 @@ let followupJobRunning = false;
 let replyCheckJobRunning = false;
 let bounceCheckJobRunning = false;
 let scrapeAdvanceJobRunning = false;
+let enrichAdvanceJobRunning = false;
 
 async function tickFollowups() {
   if (followupJobRunning) return; // previous tick still running — skip, don't overlap
@@ -68,6 +70,18 @@ async function tickScrapeAdvance() {
   }
 }
 
+async function tickEnrichAdvance() {
+  if (enrichAdvanceJobRunning) return;
+  enrichAdvanceJobRunning = true;
+  try {
+    await advanceAllInProgressEnrichments();
+  } catch (err) {
+    console.error("[scheduler] enrich advance job failed", err);
+  } finally {
+    enrichAdvanceJobRunning = false;
+  }
+}
+
 let apifyResetJobRunning = false;
 async function tickApifyReset() {
   if (apifyResetJobRunning) return;
@@ -91,12 +105,14 @@ export function initScheduler() {
   void tickReplyChecks();
   void tickBounceChecks();
   void tickScrapeAdvance();
+  void tickEnrichAdvance();
   void tickApifyReset();
 
   setInterval(tickFollowups, FOLLOWUP_JOB_INTERVAL_MS);
   setInterval(tickReplyChecks, REPLY_CHECK_JOB_INTERVAL_MS);
   setInterval(tickBounceChecks, BOUNCE_CHECK_JOB_INTERVAL_MS);
   setInterval(tickScrapeAdvance, SCRAPE_ADVANCE_JOB_INTERVAL_MS);
+  setInterval(tickEnrichAdvance, SCRAPE_ADVANCE_JOB_INTERVAL_MS);
   // Only truly needs to fire once a day; reusing the bounce-check cadence
   // is cheap (a single settings read, no-op unless the reset day has
   // actually arrived) and avoids adding yet another interval constant.

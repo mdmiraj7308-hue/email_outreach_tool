@@ -4,6 +4,9 @@ import { runReplyChecks } from "@/lib/scheduler/jobs/replyCheckJob";
 import { runBounceChecks } from "@/lib/scheduler/jobs/bounceCheckJob";
 import { runApifyResetIfDue } from "@/lib/scheduler/jobs/apifyResetJob";
 import { advanceInProgressScrapes } from "@/lib/scrapeRun";
+import { advanceAllInProgressEnrichments } from "@/lib/enrichment/pipeline";
+
+export const maxDuration = 60;
 
 /**
  * Production's sole trigger for the background jobs (follow-up dispatch,
@@ -26,6 +29,7 @@ export async function GET(req: NextRequest) {
     runBounceChecks(),
     runApifyResetIfDue(),
     advanceInProgressScrapes(),
+    advanceAllInProgressEnrichments(),
   ]);
   const errors = results
     .filter((r): r is PromiseRejectedResult => r.status === "rejected")

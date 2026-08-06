@@ -2,6 +2,8 @@ import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { enrichLead, enrichCampaignRun } from "@/lib/enrichment/pipeline";
 
+export const maxDuration = 60;
+
 const bodySchema = z.union([
   z.object({ campaignRunId: z.string().min(1) }),
   z.object({ leadId: z.string().min(1) }),

@@ -153,45 +153,79 @@ export async function enrichLead(leadId: string): Promise<void> {
 
 export interface EnrichRunResult {
   attempted: number;
-  succeeded: number;
-  failed: number;
 }
 
+function pendingEnrichmentWhere(campaignRunId: string) {
+  return {
+    campaignRunId,
+    OR: [
+      // "crawling"/"summarizing" are enrichLead's own intermediate states —
+      // included here so a lead interrupted mid-flight (the batch's cron
+      // tick got killed by Vercel before enrichLead finished) gets retried
+      // on the next batch instead of being permanently stuck, since neither
+      // status was in the original terminal-or-pending set.
+      { enrichmentStatus: { in: ["pending", "failed", "unreachable", "crawling", "summarizing"] } },
+      // "done" but no email ever got extracted is still worth retrying —
+      // e.g. an extraction-logic fix landed after this lead was already
+      // enriched under the old code. Never applies to "no_website" leads
+      // (nothing to re-crawl there).
+      { enrichmentStatus: "done", primaryEmail: "null", leadType: { not: "no_website" } },
+    ],
+  };
+}
+
+/**
+ * Kicks off enrichment for a run: marks it "enriching" and does one bounded
+ * batch immediately (so there's no dead time waiting for the first cron
+ * tick), same pattern as startCampaignScrape. Everything past that first
+ * batch is driven by advanceAllInProgressEnrichments on the cron tick — a
+ * run with 200+ pending leads used to enrich (website crawl + LLM analysis
+ * + drafting) all of them inside one request, which reliably exceeded
+ * Vercel's function execution limit and came back as a non-JSON timeout
+ * page the client couldn't parse. Same class of bug already fixed for
+ * scraping (advanceOneScrapeStep) and follow-up dispatch (runDueFollowups)
+ * — this brings enrichment in line with the same incremental-step model.
+ */
 export async function enrichCampaignRun(campaignRunId: string): Promise<EnrichRunResult> {
-  const leads = await prisma.lead.findMany({
-    where: {
-      campaignRunId,
-      OR: [
-        { enrichmentStatus: { in: ["pending", "failed", "unreachable"] } },
-        // "done" but no email ever got extracted is still worth retrying —
-        // e.g. an extraction-logic fix landed after this lead was already
-        // enriched under the old code. Never applies to "no_website" leads
-        // (nothing to re-crawl there).
-        { enrichmentStatus: "done", primaryEmail: "null", leadType: { not: "no_website" } },
-      ],
-    },
-    select: { id: true },
-  });
+  const attempted = await prisma.lead.count({ where: pendingEnrichmentWhere(campaignRunId) });
+
+  if (attempted === 0) {
+    return { attempted: 0 };
+  }
 
   await prisma.campaignRun.update({
     where: { id: campaignRunId },
     data: { status: "enriching" },
   });
 
-  let succeeded = 0;
-  let failed = 0;
+  await advanceEnrichment(campaignRunId);
+
+  return { attempted };
+}
+
+/** One bounded batch (CONCURRENCY leads) for a single run — safe to call repeatedly from a cron tick until nothing's left. */
+export async function advanceEnrichment(campaignRunId: string): Promise<void> {
+  const leads = await prisma.lead.findMany({
+    where: pendingEnrichmentWhere(campaignRunId),
+    select: { id: true },
+    take: CONCURRENCY,
+  });
+
+  if (leads.length === 0) {
+    // updateMany (not update) since this filters on status too, not just
+    // id — a plain update's where only accepts unique fields. Matches 0
+    // rows harmlessly if another concurrent call already flipped it.
+    await prisma.campaignRun.updateMany({
+      where: { id: campaignRunId, status: "enriching" },
+      data: { status: "ready" },
+    });
+    return;
+  }
 
   await runWithConcurrency(leads, CONCURRENCY, async (lead) => {
     try {
       await enrichLead(lead.id);
-      const updated = await prisma.lead.findUnique({
-        where: { id: lead.id },
-        select: { enrichmentStatus: true },
-      });
-      if (updated?.enrichmentStatus === "done") succeeded++;
-      else failed++;
     } catch (err) {
-      failed++;
       console.error(`[enrich] lead ${lead.id} failed unexpectedly`, err);
       await prisma.lead
         .update({
@@ -204,13 +238,21 @@ export async function enrichCampaignRun(campaignRunId: string): Promise<EnrichRu
         .catch(() => {});
     }
   });
+}
 
-  await prisma.campaignRun.update({
-    where: { id: campaignRunId },
-    data: { status: "ready" },
+/** Advances every run currently "enriching" by one bounded batch. Called from GET /api/cron/tick. */
+export async function advanceAllInProgressEnrichments(): Promise<void> {
+  const runs = await prisma.campaignRun.findMany({
+    where: { status: "enriching" },
+    select: { id: true },
   });
-
-  return { attempted: leads.length, succeeded, failed };
+  for (const run of runs) {
+    try {
+      await advanceEnrichment(run.id);
+    } catch (err) {
+      console.error(`[enrich ${run.id}] step failed`, err);
+    }
+  }
 }
 
 async function runWithConcurrency<T>(
