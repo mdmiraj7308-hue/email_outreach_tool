@@ -155,23 +155,27 @@ export interface EnrichRunResult {
   attempted: number;
 }
 
-// Deliberately does NOT include "done but no email ever got extracted" —
-// that used to be retried indefinitely (meant for a one-off manual re-run
-// after an extraction-logic fix), but under the incremental advanceEnrichment
-// loop that becomes a genuine infinite loop: a site with no discoverable
-// email just comes back emailless every time, so the retry pool never
-// empties and the run can never reach "ready". Confirmed in production —
-// 76 emailless leads were being endlessly recycled instead of the run
-// finishing. "done" is done, even without an email; only real incomplete
-// states are retried automatically here.
+// Only statuses that mean "never completed a full attempt" belong here:
+// "pending" (never tried) and "crawling"/"summarizing" (enrichLead's own
+// intermediate states — only still there if a batch got interrupted
+// mid-flight, e.g. the cron tick that started it got killed by Vercel
+// before enrichLead finished). "failed" and "unreachable" are deliberately
+// EXCLUDED — they mean a full attempt already ran and got a definitive
+// negative result (blocked by robots.txt, crawl error, unparsable URL).
+// Retrying those automatically forever hits the exact same infinite-loop
+// bug as the "done but no email" case below: a permanently-broken site
+// fails the same way every time, so those leads get re-picked every batch
+// and can starve out genuinely untried "pending" leads queued behind them.
+// Confirmed in production: a run stayed completely flat for 5+ minutes
+// because the same handful of chronically-unreachable leads kept getting
+// re-selected instead of the ~130 real "pending" leads behind them ever
+// being reached. "done", "failed", and "unreachable" are all equally
+// terminal for automatic retry purposes — only a deliberate manual re-run
+// should ever re-attempt them.
 function pendingEnrichmentWhere(campaignRunId: string) {
   return {
     campaignRunId,
-    // "crawling"/"summarizing" are enrichLead's own intermediate states —
-    // included so a lead interrupted mid-flight (the batch's cron tick got
-    // killed by Vercel before enrichLead finished) gets retried on the next
-    // batch instead of being permanently stuck.
-    enrichmentStatus: { in: ["pending", "failed", "unreachable", "crawling", "summarizing"] },
+    enrichmentStatus: { in: ["pending", "crawling", "summarizing"] },
   };
 }
 
@@ -210,6 +214,7 @@ export async function advanceEnrichment(campaignRunId: string): Promise<void> {
     where: pendingEnrichmentWhere(campaignRunId),
     select: { id: true },
     take: CONCURRENCY,
+    orderBy: { createdAt: "asc" }, // fixed, fair rotation — same handful of rows can't get stuck at the front forever
   });
 
   if (leads.length === 0) {
