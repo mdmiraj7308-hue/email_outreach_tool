@@ -155,22 +155,23 @@ export interface EnrichRunResult {
   attempted: number;
 }
 
+// Deliberately does NOT include "done but no email ever got extracted" —
+// that used to be retried indefinitely (meant for a one-off manual re-run
+// after an extraction-logic fix), but under the incremental advanceEnrichment
+// loop that becomes a genuine infinite loop: a site with no discoverable
+// email just comes back emailless every time, so the retry pool never
+// empties and the run can never reach "ready". Confirmed in production —
+// 76 emailless leads were being endlessly recycled instead of the run
+// finishing. "done" is done, even without an email; only real incomplete
+// states are retried automatically here.
 function pendingEnrichmentWhere(campaignRunId: string) {
   return {
     campaignRunId,
-    OR: [
-      // "crawling"/"summarizing" are enrichLead's own intermediate states —
-      // included here so a lead interrupted mid-flight (the batch's cron
-      // tick got killed by Vercel before enrichLead finished) gets retried
-      // on the next batch instead of being permanently stuck, since neither
-      // status was in the original terminal-or-pending set.
-      { enrichmentStatus: { in: ["pending", "failed", "unreachable", "crawling", "summarizing"] } },
-      // "done" but no email ever got extracted is still worth retrying —
-      // e.g. an extraction-logic fix landed after this lead was already
-      // enriched under the old code. Never applies to "no_website" leads
-      // (nothing to re-crawl there).
-      { enrichmentStatus: "done", primaryEmail: "null", leadType: { not: "no_website" } },
-    ],
+    // "crawling"/"summarizing" are enrichLead's own intermediate states —
+    // included so a lead interrupted mid-flight (the batch's cron tick got
+    // killed by Vercel before enrichLead finished) gets retried on the next
+    // batch instead of being permanently stuck.
+    enrichmentStatus: { in: ["pending", "failed", "unreachable", "crawling", "summarizing"] },
   };
 }
 
