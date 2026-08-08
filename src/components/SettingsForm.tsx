@@ -31,6 +31,8 @@ interface SettingsState {
   businessHoursTimezone: string;
   followupSpacingDays: number;
   followup2SpacingDays: number | null;
+  followupEnabled: boolean;
+  followup2Enabled: boolean;
   emailSystemPromptOverride: string;
   firstSendPauseMinSeconds: number;
   firstSendPauseMaxSeconds: number;
@@ -69,6 +71,8 @@ const emptyState: SettingsState = {
   businessHoursTimezone: "America/New_York",
   followupSpacingDays: 3,
   followup2SpacingDays: null,
+  followupEnabled: true,
+  followup2Enabled: true,
   emailSystemPromptOverride: "",
   firstSendPauseMinSeconds: 5,
   firstSendPauseMaxSeconds: 120,
@@ -340,17 +344,43 @@ export function SettingsForm() {
                 can override this with an exact date/time from its own page or Today's Sending.
               </p>
               <div className="mt-2 grid grid-cols-1 gap-4 sm:grid-cols-2">
-                <NumberField
-                  label="Days: email 1 → follow-up 1"
-                  value={state.followupSpacingDays}
-                  onChange={(v) => update("followupSpacingDays", v)}
-                />
-                <NumberField
-                  label="Days: follow-up 1 → follow-up 2 (optional, defaults to above)"
-                  value={state.followup2SpacingDays ?? state.followupSpacingDays}
-                  onChange={(v) => update("followup2SpacingDays", v)}
-                />
+                <div className="space-y-1.5">
+                  <NumberField
+                    label="Days: email 1 → follow-up 1"
+                    value={state.followupSpacingDays}
+                    onChange={(v) => update("followupSpacingDays", v)}
+                  />
+                  <label className="flex items-center gap-2 text-sm text-[var(--ink)]">
+                    <input
+                      type="checkbox"
+                      checked={state.followupEnabled}
+                      onChange={(e) => update("followupEnabled", e.target.checked)}
+                    />
+                    Send follow-up 1
+                  </label>
+                </div>
+                <div className="space-y-1.5">
+                  <NumberField
+                    label="Days: follow-up 1 → follow-up 2 (optional, defaults to above)"
+                    value={state.followup2SpacingDays ?? state.followupSpacingDays}
+                    onChange={(v) => update("followup2SpacingDays", v)}
+                  />
+                  <label className="flex items-center gap-2 text-sm text-[var(--ink)]">
+                    <input
+                      type="checkbox"
+                      checked={state.followup2Enabled}
+                      onChange={(e) => update("followup2Enabled", e.target.checked)}
+                    />
+                    Send follow-up 2
+                  </label>
+                </div>
               </div>
+              {!state.followupEnabled && (
+                <p className="mt-2 text-xs text-amber-600">
+                  Follow-up 1 is off — follow-up 2 won&apos;t send either, since it only fires
+                  after follow-up 1 does.
+                </p>
+              )}
             </div>
             <div className="grid grid-cols-2 gap-4">
               <NumberField

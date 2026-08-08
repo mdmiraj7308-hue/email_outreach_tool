@@ -41,8 +41,22 @@ export function GmailAccountsTab() {
     load();
   }, []);
 
+  const [deleteError, setDeleteError] = useState<string | null>(null);
+
   async function handleDisconnect(id: string) {
     await fetch(`/api/gmail/accounts?id=${id}`, { method: "DELETE" });
+    load();
+  }
+
+  async function handleDelete(id: string) {
+    if (!confirm("Permanently delete this account? This can't be undone.")) return;
+    setDeleteError(null);
+    const res = await fetch(`/api/gmail/accounts?id=${id}&permanent=true`, { method: "DELETE" });
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}));
+      setDeleteError(data.error ?? "Failed to delete account");
+      return;
+    }
     load();
   }
 
@@ -55,6 +69,9 @@ export function GmailAccountsTab() {
       )}
       {gmailError && (
         <p className="rounded-xl bg-red-50 px-3.5 py-2.5 text-sm text-red-700">{gmailError}</p>
+      )}
+      {deleteError && (
+        <p className="rounded-xl bg-red-50 px-3.5 py-2.5 text-sm text-red-700">{deleteError}</p>
       )}
 
       {loading ? (
@@ -79,13 +96,28 @@ export function GmailAccountsTab() {
                   </p>
                 </div>
               </div>
-              {account.isActive && (
+              {account.isActive ? (
                 <button
                   onClick={() => handleDisconnect(account.id)}
                   className="text-base font-medium text-red-600 hover:underline"
                 >
                   Disconnect
                 </button>
+              ) : (
+                <div className="flex items-center gap-4">
+                  <a
+                    href="/api/gmail/oauth/start"
+                    className="text-base font-medium text-[var(--brand-dark)] hover:underline"
+                  >
+                    Reconnect
+                  </a>
+                  <button
+                    onClick={() => handleDelete(account.id)}
+                    className="text-base font-medium text-red-600 hover:underline"
+                  >
+                    Delete
+                  </button>
+                </div>
               )}
             </div>
           ))}

@@ -61,6 +61,15 @@ model Settings {
   followupSpacingDays  Int @default(3)
   followup2SpacingDays Int?
 
+  // Whether each follow-up stage fires at all — drafts for both are always
+  // written regardless (cheap, and lets a stage be turned back on later
+  // without redrafting), but scheduleNextFollowup skips creating the actual
+  // send when the matching flag is off. followup2Enabled has no effect if
+  // followupEnabled is off, since follow-up 2 only ever fires after
+  // follow-up 1 actually sends.
+  followupEnabled  Boolean @default(true)
+  followup2Enabled Boolean @default(true)
+
   // Persistent default instructions appended to every email-drafting system
   // prompt; can be overridden per-batch at "write emails" time without
   // being saved here.

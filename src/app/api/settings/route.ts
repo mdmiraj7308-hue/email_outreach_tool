@@ -57,6 +57,8 @@ const updateSchema = z
     businessHoursTimezone: z.string().optional(),
     followupSpacingDays: z.preprocess(nullToUndefined, z.number().int().positive().optional()),
     followup2SpacingDays: z.preprocess(nullToUndefined, z.number().int().positive().optional()),
+    followupEnabled: z.boolean().optional(),
+    followup2Enabled: z.boolean().optional(),
     emailSystemPromptOverride: z.string().optional(),
     firstSendPauseMinSeconds: z.preprocess(nullToUndefined, z.number().int().nonnegative().optional()),
     firstSendPauseMaxSeconds: z.preprocess(nullToUndefined, z.number().int().nonnegative().optional()),

@@ -31,11 +31,39 @@ export async function GET() {
   return NextResponse.json({ accounts: withCounts });
 }
 
+/**
+ * Two distinct actions behind this one route:
+ * - Default (no `permanent` param): disconnect — sets isActive false, stops
+ *   the account from being picked for new sends. Reversible via reconnect
+ *   (re-authorizing the same email through /api/gmail/oauth/start upserts
+ *   isActive back to true).
+ * - `permanent=true`: actually removes the row. Only possible for an
+ *   account with no send history — EmailSend/DailySendCounter/
+ *   SendingCampaignLead all reference it without cascade, by design (send
+ *   history shouldn't silently disappear), so this fails loudly instead of
+ *   deleting an account's real sending record out from under it.
+ */
 export async function DELETE(req: NextRequest) {
   const id = req.nextUrl.searchParams.get("id");
   if (!id) {
     return NextResponse.json({ error: "Missing id" }, { status: 400 });
   }
+
+  if (req.nextUrl.searchParams.get("permanent") === "true") {
+    try {
+      await prisma.senderAccount.delete({ where: { id } });
+    } catch {
+      return NextResponse.json(
+        {
+          error:
+            "Can't permanently delete this account — it has real send history attached. It's already disconnected and excluded from new sends; that history stays as your audit trail.",
+        },
+        { status: 409 }
+      );
+    }
+    return NextResponse.json({ ok: true });
+  }
+
   await prisma.senderAccount.update({ where: { id }, data: { isActive: false } });
   return NextResponse.json({ ok: true });
 }

@@ -98,6 +98,13 @@ async function armNextDispatchGate(settings: Settings, sequence: number): Promis
 async function scheduleNextFollowup(leadId: string, justSentSequence: number) {
   if (justSentSequence >= 3) return;
 
+  const settings = await getSettings();
+  // followup2Enabled never matters on its own — follow-up 2 (sequence 3)
+  // only ever fires after follow-up 1 (sequence 2) actually sends, so if
+  // that's off, sequence 3 is naturally never reached anyway.
+  if (justSentSequence === 1 && !settings.followupEnabled) return;
+  if (justSentSequence === 2 && !settings.followup2Enabled) return;
+
   const lead = await prisma.lead.findUnique({ where: { id: leadId } });
   if (!lead || lead.replyStatus === "Yes") return;
 
@@ -120,7 +127,6 @@ async function scheduleNextFollowup(leadId: string, justSentSequence: number) {
     nextSequence === 2 ? lead.followup2ScheduledFor : lead.followup3ScheduledFor;
 
   let scheduledFor: Date;
-  const settings = await getSettings();
   if (customScheduledFor) {
     scheduledFor = customScheduledFor;
   } else {
