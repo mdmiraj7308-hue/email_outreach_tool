@@ -29,6 +29,22 @@ export async function GET(req: NextRequest) {
     prisma.emailSend.count({ where }),
   ]);
 
+  // A failed send has no sentAt (it never actually sent), and scheduledFor
+  // is just the shared campaign time-slot multiple leads on the same
+  // account/day were assigned — NOT when the system actually attempted it,
+  // which made spaced-out real attempts look like they all fired at once.
+  // JobRun.runAt is the real per-attempt timestamp the dispatch loop logs;
+  // fall back to it, one lookup for the whole page rather than per-row.
+  const jobRuns = await prisma.jobRun.findMany({
+    where: { refId: { in: sends.map((s) => s.id) }, jobType: "followup" },
+    orderBy: { runAt: "desc" },
+    select: { refId: true, runAt: true },
+  });
+  const latestAttemptBySendId = new Map<string, Date>();
+  for (const j of jobRuns) {
+    if (j.refId && !latestAttemptBySendId.has(j.refId)) latestAttemptBySendId.set(j.refId, j.runAt);
+  }
+
   return NextResponse.json({
     sends: sends.map((s) => ({
       id: s.id,
@@ -38,8 +54,7 @@ export async function GET(req: NextRequest) {
       subject: s.emailDraft.subject,
       senderEmail: s.senderAccount?.emailAddress ?? null,
       status: s.status,
-      sentAt: s.sentAt?.toISOString() ?? null,
-      scheduledFor: s.scheduledFor.toISOString(),
+      attemptedAt: (s.sentAt ?? latestAttemptBySendId.get(s.id) ?? s.scheduledFor).toISOString(),
       errorMessage: s.errorMessage,
     })),
     total,

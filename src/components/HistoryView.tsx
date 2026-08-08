@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { card, badgeClass } from "@/lib/ui";
+import { card, badgeClass, btnGhost } from "@/lib/ui";
 
 interface HistoryRow {
   id: string;
@@ -11,8 +11,7 @@ interface HistoryRow {
   subject: string;
   senderEmail: string | null;
   status: string;
-  sentAt: string | null;
-  scheduledFor: string;
+  attemptedAt: string;
   errorMessage: string | null;
 }
 
@@ -35,9 +34,11 @@ export function HistoryView() {
   const [total, setTotal] = useState(0);
   const [page, setPage] = useState(1);
   const [loading, setLoading] = useState(true);
+  const [restoring, setRestoring] = useState<string | null>(null);
+  const [restoreMessage, setRestoreMessage] = useState<Record<string, string>>({});
   const pageSize = 50;
 
-  useEffect(() => {
+  function load() {
     setLoading(true);
     fetch(`/api/history?page=${page}`)
       .then((r) => r.json())
@@ -46,7 +47,33 @@ export function HistoryView() {
         setTotal(data.total ?? 0);
       })
       .finally(() => setLoading(false));
+  }
+
+  useEffect(() => {
+    load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [page]);
+
+  async function handleRestore(id: string) {
+    if (!confirm("Restore this lead to the fresh qualified pool? It'll be eligible for a new sending campaign again.")) {
+      return;
+    }
+    setRestoring(id);
+    try {
+      const res = await fetch(`/api/history/${id}/restore`, { method: "POST" });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error ?? "Failed to restore");
+      setRows((prev) => (prev ? prev.filter((r) => r.id !== id) : prev));
+      setTotal((t) => t - 1);
+    } catch (err) {
+      setRestoreMessage((prev) => ({
+        ...prev,
+        [id]: err instanceof Error ? err.message : "Failed to restore",
+      }));
+    } finally {
+      setRestoring(null);
+    }
+  }
 
   const totalPages = Math.max(1, Math.ceil(total / pageSize));
 
@@ -68,13 +95,14 @@ export function HistoryView() {
                   <th className="py-2 pr-4">Sequence</th>
                   <th className="py-2 pr-4">Sender</th>
                   <th className="py-2 pr-4">Status</th>
+                  <th className="py-2 pr-4"></th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-[var(--border)]">
                 {rows.map((r) => (
                   <tr key={r.id}>
                     <td className="whitespace-nowrap py-2.5 pr-4 text-[var(--ink)]">
-                      {formatExact(r.sentAt ?? r.scheduledFor)}
+                      {formatExact(r.attemptedAt)}
                     </td>
                     <td className="py-2.5 pr-4 text-[var(--ink)]">{r.businessName}</td>
                     <td className="py-2.5 pr-4 text-[var(--ink-soft)]">{r.recipient}</td>
@@ -86,6 +114,22 @@ export function HistoryView() {
                       <span className={badgeClass(r.status === "sent" ? "green" : "red")} title={r.errorMessage ?? undefined}>
                         {r.status}
                       </span>
+                    </td>
+                    <td className="py-2.5 pr-4">
+                      {r.status === "failed" && (
+                        <>
+                          <button
+                            onClick={() => handleRestore(r.id)}
+                            disabled={restoring === r.id}
+                            className={btnGhost}
+                          >
+                            {restoring === r.id ? "Restoring…" : "Restore"}
+                          </button>
+                          {restoreMessage[r.id] && (
+                            <span className="ml-2 text-xs text-red-600">{restoreMessage[r.id]}</span>
+                          )}
+                        </>
+                      )}
                     </td>
                   </tr>
                 ))}
