@@ -65,6 +65,17 @@ const NAV_ITEMS = [
     ),
   },
   {
+    href: "/history",
+    label: "History",
+    icon: (
+      <svg viewBox="0 0 24 24" fill="none" strokeWidth="1.8" stroke="currentColor" className="h-6 w-6">
+        <path strokeLinecap="round" strokeLinejoin="round" d="M12 8v4l3 2" />
+        <path strokeLinecap="round" strokeLinejoin="round" d="M4.3 9A8 8 0 1112 20a8 8 0 01-6.9-4" />
+        <path strokeLinecap="round" strokeLinejoin="round" d="M3 4v5h5" />
+      </svg>
+    ),
+  },
+  {
     href: "/settings",
     label: "Settings",
     icon: (

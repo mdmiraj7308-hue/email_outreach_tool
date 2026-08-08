@@ -9,8 +9,7 @@ import { extractGenericEmail } from "@/lib/enrichment/extractGenericEmail";
 import { syncLeadToSheet } from "@/lib/leadSheetSync";
 import { nullify } from "@/lib/nullify";
 import { verifyEmailAddress } from "@/lib/emailVerify";
-import { cancelScheduledSendsForLead, isLeadQualified } from "@/lib/leadQualification";
-import { writeEmailsForLead } from "@/lib/emailDrafting";
+import { cancelScheduledSendsForLead } from "@/lib/leadQualification";
 
 const AGGREGATE_TEXT_MAX_CHARS = 6000;
 const CONCURRENCY = 3;
@@ -111,7 +110,7 @@ export async function enrichLead(leadId: string): Promise<void> {
     const settings = await getSettings();
     const llm = getActiveLlmClient(settings);
     const analysis = await generateBusinessAnalysis(llm, lead.businessName, aggregatedText);
-    const updated = await prisma.lead.update({
+    await prisma.lead.update({
       where: { id: leadId },
       data: {
         aboutSummary: nullify(analysis.summary),
@@ -125,17 +124,12 @@ export async function enrichLead(leadId: string): Promise<void> {
         enrichmentError: null,
       },
     });
-
-    // Draft immediately once a lead qualifies — no more manual per-run
-    // "Write Emails + Upload to Sheet" step. A drafting failure (e.g. LLM
-    // API hiccup) doesn't affect enrichmentStatus; it's just logged and can
-    // be retried later without re-enriching.
-    if (isLeadQualified(updated)) {
-      const result = await writeEmailsForLead(leadId);
-      if (!result.ok) {
-        console.error(`[enrich] auto-draft failed for lead ${leadId}: ${result.error}`);
-      }
-    }
+    // Enrichment only summarizes and syncs to the sheet — it no longer
+    // drafts emails. Drafting is an explicit step now: "Write emails + 2
+    // follow-ups" on a Sending Campaign's own page, once you've created a
+    // campaign and audited the lead list. Keeps LLM drafting cost limited
+    // to leads actually going into a real campaign, not every qualified
+    // lead the moment it's enriched.
   } catch (err) {
     // Crawl/extraction results (LinkedIn, founder email) are still valuable
     // even if the analysis call fails — kept, only this step is marked failed.

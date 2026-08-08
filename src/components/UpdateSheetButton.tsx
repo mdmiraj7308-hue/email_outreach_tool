@@ -6,9 +6,9 @@ import { btnPrimary } from "@/lib/ui";
 
 /**
  * Pushes current lead/draft state for this run's qualified leads to the
- * Google Sheet. Drafting is handled elsewhere now — automatically on
- * qualification, and per-campaign via "Write emails + 2 follow-ups" on a
- * Sending Campaign — this button only re-syncs the sheet.
+ * Google Sheet. Enrichment only summarizes and syncs — drafting is a
+ * separate, explicit step via "Write emails + 2 follow-ups" on a Sending
+ * Campaign's own page. This button only re-syncs the sheet.
  */
 export function UpdateSheetButton({ campaignRunId }: { campaignRunId: string }) {
   const router = useRouter();

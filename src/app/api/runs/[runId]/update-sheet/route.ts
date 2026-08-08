@@ -5,10 +5,10 @@ import { QUALIFIED_LEAD_WHERE } from "@/lib/leadQualification";
 
 /**
  * Re-syncs every qualified lead in this run to the Google Sheet — pushes
- * current lead/draft state as-is, never drafts anything. Drafting happens
- * automatically the moment a lead qualifies (see enrichLead in
- * src/lib/enrichment/pipeline.ts) and again, per sending campaign, via the
- * "Write emails + 2 follow-ups" action on that campaign's own page.
+ * current lead/draft state as-is, never drafts anything. Enrichment only
+ * summarizes and syncs; drafting is a separate, explicit step via "Write
+ * emails + 2 follow-ups" on a Sending Campaign's own page, once a campaign
+ * has been created and the lead list audited.
  */
 export async function POST(req: NextRequest, { params }: { params: Promise<{ runId: string }> }) {
   const { runId } = await params;
