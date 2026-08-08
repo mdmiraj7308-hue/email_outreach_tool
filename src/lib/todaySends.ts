@@ -9,12 +9,37 @@ export const BUCKET_SEQUENCE: Record<string, number> = {
   followup2: 3,
 };
 
-export async function getTodaySends(bucket: string): Promise<TodaySendItem[]> {
+export interface TodaySendsResult {
+  items: TodaySendItem[];
+  // True when nothing was actually due today and this is showing the next
+  // upcoming scheduled batch instead, so the page never just looks empty
+  // with no visibility into what's coming.
+  isUpcoming: boolean;
+}
+
+const sendInclude = {
+  lead: {
+    select: {
+      id: true,
+      businessName: true,
+      primaryEmail: true,
+      aboutSummary: true,
+      bounced: true,
+      emailVerificationStatus: true,
+      followup2ScheduledFor: true,
+      followup3ScheduledFor: true,
+    },
+  },
+  emailDraft: { select: { id: true, subject: true, body: true } },
+  senderAccount: { select: { emailAddress: true } },
+} as const;
+
+export async function getTodaySends(bucket: string): Promise<TodaySendsResult> {
   const sequence = BUCKET_SEQUENCE[bucket];
-  if (!sequence) return [];
+  if (!sequence) return { items: [], isUpcoming: false };
 
   const now = new Date();
-  const sends = await prisma.emailSend.findMany({
+  let sends = await prisma.emailSend.findMany({
     where: {
       sequence,
       // "ready" (drafted via Write Emails + Upload, not yet released for
@@ -27,23 +52,32 @@ export async function getTodaySends(bucket: string): Promise<TodaySendItem[]> {
       ],
     },
     orderBy: { scheduledFor: "asc" },
-    include: {
-      lead: {
-        select: {
-          id: true,
-          businessName: true,
-          primaryEmail: true,
-          aboutSummary: true,
-          bounced: true,
-          emailVerificationStatus: true,
-          followup2ScheduledFor: true,
-          followup3ScheduledFor: true,
-        },
-      },
-      emailDraft: { select: { id: true, subject: true, body: true } },
-      senderAccount: { select: { emailAddress: true } },
-    },
+    include: sendInclude,
   });
+
+  let isUpcoming = false;
+  if (sends.length === 0) {
+    // Nothing due today — show the next upcoming scheduled day's batch
+    // instead of an empty page, so there's always visibility into when the
+    // next sends will actually go out.
+    const next = await prisma.emailSend.findFirst({
+      where: { sequence, status: "scheduled", scheduledFor: { gt: endOfDay(now) } },
+      orderBy: { scheduledFor: "asc" },
+      select: { scheduledFor: true },
+    });
+    if (next) {
+      sends = await prisma.emailSend.findMany({
+        where: {
+          sequence,
+          status: "scheduled",
+          scheduledFor: { gte: startOfDay(next.scheduledFor), lte: endOfDay(next.scheduledFor) },
+        },
+        orderBy: { scheduledFor: "asc" },
+        include: sendInclude,
+      });
+      isUpcoming = true;
+    }
+  }
 
   // Self-heal: a lead can go bad (bounced, or edited into an invalid
   // address) after its send was queued but before the next scheduler tick
@@ -61,7 +95,7 @@ export async function getTodaySends(bucket: string): Promise<TodaySendItem[]> {
     stillGood.push(s);
   }
 
-  return stillGood.map((s) => ({
+  const items = stillGood.map((s) => ({
     sendId: s.id,
     leadId: s.lead.id,
     businessName: s.lead.businessName,
@@ -78,4 +112,6 @@ export async function getTodaySends(bucket: string): Promise<TodaySendItem[]> {
     draft: { id: s.emailDraft.id, subject: s.emailDraft.subject, body: s.emailDraft.body },
     liveSpamScore: scoreEmailContent(s.emailDraft.subject, s.emailDraft.body),
   }));
+
+  return { items, isUpcoming };
 }

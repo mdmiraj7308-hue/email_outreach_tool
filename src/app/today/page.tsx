@@ -4,7 +4,7 @@ import { TodaySendingView } from "@/components/TodaySendingView";
 export const dynamic = "force-dynamic";
 
 export default async function TodaySendingPage() {
-  const items = await getTodaySends("first");
+  const { items, isUpcoming } = await getTodaySends("first");
 
   return (
     <div className="space-y-6">
@@ -16,7 +16,7 @@ export default async function TodaySendingPage() {
           First-email sends scheduled for today, across all runs.
         </p>
       </div>
-      <TodaySendingView bucket="first" initialItems={items} />
+      <TodaySendingView bucket="first" initialItems={items} initialIsUpcoming={isUpcoming} />
     </div>
   );
 }

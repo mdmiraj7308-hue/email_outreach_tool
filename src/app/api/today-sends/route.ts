@@ -6,6 +6,6 @@ export async function GET(req: NextRequest) {
   if (!BUCKET_SEQUENCE[bucket]) {
     return NextResponse.json({ error: "Invalid bucket" }, { status: 400 });
   }
-  const items = await getTodaySends(bucket);
-  return NextResponse.json({ items });
+  const result = await getTodaySends(bucket);
+  return NextResponse.json(result);
 }

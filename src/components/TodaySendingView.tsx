@@ -36,14 +36,26 @@ const BUCKET_LABEL: Record<string, string> = {
   followup2: "3rd follow-up",
 };
 
+function formatExact(iso: string): string {
+  return new Date(iso).toLocaleString(undefined, {
+    month: "short",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
+
 export function TodaySendingView({
   bucket,
   initialItems,
+  initialIsUpcoming = false,
 }: {
   bucket: "first" | "followup1" | "followup2";
   initialItems: TodaySendItem[];
+  initialIsUpcoming?: boolean;
 }) {
   const [items, setItems] = useState<TodaySendItem[]>(initialItems);
+  const [isUpcoming, setIsUpcoming] = useState(initialIsUpcoming);
   const [expanded, setExpanded] = useState<string | null>(null);
   const [editing, setEditing] = useState<Record<string, EditState>>({});
   const [saving, setSaving] = useState<string | null>(null);
@@ -53,19 +65,24 @@ export function TodaySendingView({
   const [liveScores, setLiveScores] = useState<Record<string, { score: number; flags: string[] }>>({});
   const debounceRef = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
 
-  const hasSendable = items.some((i) => i.status === "ready" || i.status === "scheduled");
+  // Releasing early only makes sense for a batch that's actually due —
+  // forcing an upcoming (not-yet-due) batch out now would defeat the
+  // business-hours/daily-cap pacing it was scheduled under.
+  const hasSendable = !isUpcoming && items.some((i) => i.status === "ready" || i.status === "scheduled");
 
   async function refresh() {
     const res = await fetch(`/api/today-sends?bucket=${bucket}`);
     if (res.ok) {
       const data = await res.json();
       setItems(data.items);
+      setIsUpcoming(data.isUpcoming);
     }
   }
 
-  // Only "scheduled" items are actively in flight and need polling —
-  // "ready" ones just sit until you act, no need to keep re-fetching.
-  const hasInFlight = items.some((i) => i.status === "scheduled");
+  // Only "scheduled" items due today are actively in flight and need
+  // polling — "ready" ones just sit until you act, and an upcoming
+  // (not-yet-due) batch isn't going anywhere for a while either.
+  const hasInFlight = !isUpcoming && items.some((i) => i.status === "scheduled");
 
   useEffect(() => {
     if (!hasInFlight) return;
@@ -210,12 +227,22 @@ export function TodaySendingView({
     <div className="space-y-4">
       <div className="flex items-center justify-between">
         <p className="text-sm text-[var(--ink-soft)]">
-          {items.length} lead{items.length === 1 ? "" : "s"} in today's {BUCKET_LABEL[bucket]} batch
+          {items.length} lead{items.length === 1 ? "" : "s"} in {isUpcoming ? "the next upcoming" : "today's"}{" "}
+          {BUCKET_LABEL[bucket]} batch
         </p>
-        <button onClick={handleStartSending} disabled={starting || !hasSendable} className={btnPrimary}>
-          {starting ? "Starting…" : "Start Sending"}
-        </button>
+        {!isUpcoming && (
+          <button onClick={handleStartSending} disabled={starting || !hasSendable} className={btnPrimary}>
+            {starting ? "Starting…" : "Start Sending"}
+          </button>
+        )}
       </div>
+      {isUpcoming && items.length > 0 && (
+        <p className="text-xs text-amber-600">
+          Nothing due today — showing the next scheduled batch, for{" "}
+          {formatExact(items[0].scheduledFor)}. Nothing to do here yet; it&apos;ll send
+          automatically when its time comes.
+        </p>
+      )}
       {hasSendable && (
         <p className="text-xs text-[var(--ink-soft)]">
           Nothing sends until you click Start Sending — then they go out one at a time with a
@@ -225,7 +252,7 @@ export function TodaySendingView({
 
       {items.length === 0 ? (
         <div className="rounded-2xl border border-dashed border-[var(--border)] bg-white px-6 py-12 text-center text-sm text-[var(--ink-soft)]">
-          Nothing ready to send in this bucket yet.
+          Nothing scheduled yet.
         </div>
       ) : (
         <div className="space-y-3">
@@ -251,6 +278,13 @@ export function TodaySendingView({
                     <p className="text-sm text-[var(--ink-soft)]">{item.primaryEmail}</p>
                   </div>
                   <div className="flex items-center gap-2">
+                    <span className="text-sm text-[var(--ink-soft)]">
+                      {item.sentAt
+                        ? `sent ${formatExact(item.sentAt)}`
+                        : item.status === "ready"
+                          ? "not yet scheduled"
+                          : `scheduled for ${formatExact(item.scheduledFor)}`}
+                    </span>
                     <span className={spamBadge.className}>{spamBadge.label}</span>
                     {item.status === "sent" && item.sentManually ? (
                       <span className={badgeClass("red")} title="Sent individually via Send Now — Start Sending will skip this">
