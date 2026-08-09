@@ -72,8 +72,6 @@ export function SendingCampaignView({
   const [rewriteFeedback, setRewriteFeedback] = useState<Record<string, string>>({});
   const [rewriting, setRewriting] = useState<string | null>(null);
   const [rewriteMessage, setRewriteMessage] = useState<Record<string, string>>({});
-  const [writingAll, setWritingAll] = useState(false);
-  const [writeAllMessage, setWriteAllMessage] = useState<string | null>(null);
 
   const isDraftStatus = status === "draft";
   const undraftedCount = leads.filter((l) => l.drafts.length < 3).length;
@@ -157,39 +155,6 @@ export function SendingCampaignView({
     }
   }
 
-  async function handleWriteAll() {
-    setWritingAll(true);
-    setWriteAllMessage(null);
-    try {
-      const res = await fetch(`/api/sending-campaigns/${campaignId}/write-emails`, { method: "POST" });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error ?? "Failed to write emails");
-
-      const results = data.results as {
-        leadId: string;
-        ok: boolean;
-        drafts?: Draft[];
-        error?: string;
-      }[];
-      setLeads((prev) =>
-        prev.map((lead) => {
-          const r = results.find((x) => x.leadId === lead.leadId);
-          return r?.ok && r.drafts ? { ...lead, drafts: r.drafts } : lead;
-        })
-      );
-      const failedCount = results.filter((r) => !r.ok).length;
-      setWriteAllMessage(
-        failedCount > 0
-          ? `Wrote emails for ${results.length - failedCount}/${results.length} leads — ${failedCount} failed.`
-          : `Wrote emails for all ${results.length} leads.`
-      );
-    } catch (err) {
-      setWriteAllMessage(err instanceof Error ? `Error: ${err.message}` : "Failed to write emails");
-    } finally {
-      setWritingAll(false);
-    }
-  }
-
   async function handleConfirm() {
     setConfirming(true);
     setConfirmMessage(null);
@@ -213,34 +178,27 @@ export function SendingCampaignView({
           {leads.length} lead{leads.length === 1 ? "" : "s"} in this campaign
         </p>
         {isDraftStatus ? (
-          <div className="flex items-center gap-2">
-            <button onClick={handleWriteAll} disabled={writingAll} className={btnSecondary}>
-              {writingAll ? "Writing…" : "Write emails + 2 follow-ups"}
-            </button>
-            <button
-              onClick={handleConfirm}
-              disabled={confirming || undraftedCount > 0}
-              title={undraftedCount > 0 ? "Write emails for every lead first" : undefined}
-              className={btnPrimary}
-            >
-              {confirming ? "Confirming…" : "Confirm & Schedule"}
-            </button>
-          </div>
+          <button
+            onClick={handleConfirm}
+            disabled={confirming || undraftedCount > 0}
+            title={undraftedCount > 0 ? "Write emails for every lead first" : undefined}
+            className={btnPrimary}
+          >
+            {confirming ? "Confirming…" : "Confirm & Schedule"}
+          </button>
         ) : (
           <span className={badgeClass("green")}>{status}</span>
         )}
       </div>
       {isDraftStatus && (
         <p className="text-xs text-[var(--ink-soft)]">
-          Audit the list below, click Write emails + 2 follow-ups to draft the cold email and both
-          follow-ups for every lead, then review/edit before confirming. Nothing is scheduled
-          until you click Confirm & Schedule — sending then happens automatically within business
-          hours, paced across your connected accounts.
+          Audit the list below, then expand each lead and click Write to draft its emails before
+          confirming. Nothing is scheduled until you click Confirm & Schedule — sending then
+          happens automatically within business hours, paced across your connected accounts.
           {undraftedCount > 0 &&
             ` ${undraftedCount} of ${leads.length} lead${undraftedCount === 1 ? "" : "s"} still need${undraftedCount === 1 ? "s" : ""} emails written.`}
         </p>
       )}
-      {writeAllMessage && <p className="text-sm text-[var(--ink-soft)]">{writeAllMessage}</p>}
       {confirmMessage && <p className="text-sm text-[var(--ink-soft)]">{confirmMessage}</p>}
 
       <div className="space-y-3">
@@ -296,7 +254,7 @@ export function SendingCampaignView({
                       <p className="text-xs text-[var(--ink-soft)]">
                         {lead.drafts.length > 0
                           ? "Regenerates all 3 emails using your Settings email instructions and this lead's business summary, plus any feedback you add below."
-                          : "Drafts all 3 emails using your Settings email instructions and this lead's business summary — same as the bulk button above, just for this one lead."}
+                          : "Drafts all 3 emails using your Settings email instructions and this lead's business summary."}
                       </p>
                       <textarea
                         value={rewriteFeedback[lead.leadId] ?? ""}
