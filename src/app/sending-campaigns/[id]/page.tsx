@@ -1,5 +1,6 @@
 import { notFound } from "next/navigation";
 import { prisma } from "@/lib/prisma";
+import { getSettings } from "@/lib/settings";
 import { SendingCampaignView, type CampaignLead } from "@/components/SendingCampaignView";
 
 export const dynamic = "force-dynamic";
@@ -10,6 +11,7 @@ export default async function SendingCampaignPage({
   params: Promise<{ id: string }>;
 }) {
   const { id } = await params;
+  const settings = await getSettings();
   const campaign = await prisma.sendingCampaign.findUnique({
     where: { id },
     include: {
@@ -45,7 +47,13 @@ export default async function SendingCampaignPage({
         <h1 className="text-3xl font-bold tracking-tight text-[var(--ink)]">{campaign.label}</h1>
         <p className="mt-1 text-sm text-[var(--ink-soft)]">Status: {campaign.status}</p>
       </div>
-      <SendingCampaignView campaignId={campaign.id} status={campaign.status} initialLeads={leads} />
+      <SendingCampaignView
+        campaignId={campaign.id}
+        status={campaign.status}
+        initialLeads={leads}
+        followupEnabled={settings.followupEnabled}
+        followup2Enabled={settings.followup2Enabled}
+      />
     </div>
   );
 }

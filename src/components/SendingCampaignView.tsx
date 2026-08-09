@@ -50,14 +50,22 @@ function CopyButton({ text, label }: { text: string; label: string }) {
   );
 }
 
+function draftKey(leadId: string, sequence: number): string {
+  return `${leadId}:${sequence}`;
+}
+
 export function SendingCampaignView({
   campaignId,
   status,
   initialLeads,
+  followupEnabled,
+  followup2Enabled,
 }: {
   campaignId: string;
   status: string;
   initialLeads: CampaignLead[];
+  followupEnabled: boolean;
+  followup2Enabled: boolean;
 }) {
   const router = useRouter();
   const [leads, setLeads] = useState(initialLeads);
@@ -69,28 +77,44 @@ export function SendingCampaignView({
   const [saveMessage, setSaveMessage] = useState<Record<string, string>>({});
   const [confirming, setConfirming] = useState(false);
   const [confirmMessage, setConfirmMessage] = useState<string | null>(null);
-  const [rewriteFeedback, setRewriteFeedback] = useState<Record<string, string>>({});
-  const [rewriting, setRewriting] = useState<string | null>(null);
-  const [rewriteMessage, setRewriteMessage] = useState<Record<string, string>>({});
 
   const isDraftStatus = status === "draft";
-  const undraftedCount = leads.filter((l) => l.drafts.length < 3).length;
+  // Only sequences that can actually send matter — no point requiring (or
+  // even showing) follow-up drafts while that stage is off in Settings.
+  const visibleSequences = [1, ...(followupEnabled ? [2] : []), ...(followupEnabled && followup2Enabled ? [3] : [])];
+
+  function isLeadFullyDrafted(lead: CampaignLead): boolean {
+    return visibleSequences.every((seq) => lead.drafts.some((d) => d.sequence === seq));
+  }
+  const undraftedCount = leads.filter((l) => !isLeadFullyDrafted(l)).length;
 
   function currentTo(lead: CampaignLead): string {
     return toEdits[lead.leadId] ?? lead.primaryEmail;
   }
-  function currentDraft(draft: Draft): DraftEdit {
-    return draftEdits[draft.id] ?? { subject: draft.subject, body: draft.body };
+  function currentDraft(leadId: string, sequence: number, existing: Draft | undefined): DraftEdit {
+    return (
+      draftEdits[draftKey(leadId, sequence)] ?? {
+        subject: existing?.subject ?? "",
+        body: existing?.body ?? "",
+      }
+    );
   }
 
   async function handleSaveLead(lead: CampaignLead) {
     setSaving(lead.leadId);
     try {
       const emailChanged = toEdits[lead.leadId] !== undefined && toEdits[lead.leadId] !== lead.primaryEmail;
-      const changedDrafts = lead.drafts.filter((d) => {
-        const edit = draftEdits[d.id];
-        return edit && (edit.subject !== d.subject || edit.body !== d.body);
-      });
+
+      const draftSaves = visibleSequences
+        .map((seq) => {
+          const existing = lead.drafts.find((d) => d.sequence === seq);
+          const edit = draftEdits[draftKey(lead.leadId, seq)];
+          if (!edit) return null; // untouched — nothing to save for this sequence
+          if (existing && edit.subject === existing.subject && edit.body === existing.body) return null;
+          if (!edit.subject.trim() || !edit.body.trim()) return null; // don't save blank content
+          return { seq, existing, edit };
+        })
+        .filter((x): x is { seq: number; existing: Draft | undefined; edit: DraftEdit } => x !== null);
 
       const results = await Promise.all([
         emailChanged
@@ -100,17 +124,44 @@ export function SendingCampaignView({
               body: JSON.stringify({ primaryEmail: toEdits[lead.leadId] }),
             }).then((r) => r.json().then((data) => ({ ok: r.ok, data })))
           : null,
-        ...changedDrafts.map((d) =>
-          fetch(`/api/drafts/${d.id}`, {
-            method: "PUT",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify(draftEdits[d.id]),
-          }).then((r) => r.json().then((data) => ({ ok: r.ok, data })))
+        ...draftSaves.map(({ seq, existing, edit }) =>
+          existing
+            ? fetch(`/api/drafts/${existing.id}`, {
+                method: "PUT",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify(edit),
+              }).then((r) => r.json().then((data) => ({ ok: r.ok, data })))
+            : fetch(`/api/leads/${lead.leadId}/manual-draft`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ sequence: seq, ...edit }),
+              }).then((r) => r.json().then((data) => ({ ok: r.ok, data })))
         ),
       ]);
 
       const failed = results.find((r) => r && !r.ok);
       if (failed) throw new Error(failed.data?.error ?? "Failed to save");
+
+      const savedDrafts = results.slice(1).filter((r): r is { ok: true; data: Draft } => !!r && r.ok);
+      if (savedDrafts.length > 0) {
+        setLeads((prev) =>
+          prev.map((l) => {
+            if (l.leadId !== lead.leadId) return l;
+            const nextDrafts = [...l.drafts];
+            for (const { data } of savedDrafts) {
+              const i = nextDrafts.findIndex((d) => d.sequence === data.sequence);
+              if (i >= 0) nextDrafts[i] = data;
+              else nextDrafts.push(data);
+            }
+            return { ...l, drafts: nextDrafts };
+          })
+        );
+      }
+      setDraftEdits((prev) => {
+        const next = { ...prev };
+        for (const { seq } of draftSaves) delete next[draftKey(lead.leadId, seq)];
+        return next;
+      });
 
       setSaveMessage((prev) => ({ ...prev, [lead.leadId]: "Saved." }));
       router.refresh();
@@ -121,37 +172,6 @@ export function SendingCampaignView({
       }));
     } finally {
       setSaving(null);
-    }
-  }
-
-  async function handleRewrite(lead: CampaignLead) {
-    setRewriting(lead.leadId);
-    setRewriteMessage((prev) => ({ ...prev, [lead.leadId]: "" }));
-    try {
-      const res = await fetch(`/api/leads/${lead.leadId}/rewrite-emails`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ feedback: rewriteFeedback[lead.leadId] ?? "" }),
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error ?? "Failed to rewrite");
-
-      const newDrafts = data.drafts as { id: string; subject: string; body: string }[];
-      setDraftEdits((prev) => {
-        const next = { ...prev };
-        for (const d of newDrafts) {
-          next[d.id] = { subject: d.subject, body: d.body };
-        }
-        return next;
-      });
-      setRewriteMessage((prev) => ({ ...prev, [lead.leadId]: "Rewritten — review the cold email and both follow-ups below." }));
-    } catch (err) {
-      setRewriteMessage((prev) => ({
-        ...prev,
-        [lead.leadId]: err instanceof Error ? `Error: ${err.message}` : "Failed to rewrite",
-      }));
-    } finally {
-      setRewriting(null);
     }
   }
 
@@ -192,9 +212,10 @@ export function SendingCampaignView({
       </div>
       {isDraftStatus && (
         <p className="text-xs text-[var(--ink-soft)]">
-          Audit the list below, then expand each lead and click Write to draft its emails before
-          confirming. Nothing is scheduled until you click Confirm & Schedule — sending then
+          Audit the list below, then expand each lead and write its email{visibleSequences.length > 1 ? "s" : ""}{" "}
+          before confirming. Nothing is scheduled until you click Confirm & Schedule — sending then
           happens automatically within business hours, paced across your connected accounts.
+          {!followupEnabled && " Follow-ups are off in Settings, so only the cold email is needed."}
           {undraftedCount > 0 &&
             ` ${undraftedCount} of ${leads.length} lead${undraftedCount === 1 ? "" : "s"} still need${undraftedCount === 1 ? "s" : ""} emails written.`}
         </p>
@@ -207,7 +228,7 @@ export function SendingCampaignView({
           const to = currentTo(lead);
           const activeSequence = openSequence[lead.leadId] ?? 1;
           const activeDraft = lead.drafts.find((d) => d.sequence === activeSequence);
-          const activeEdit = activeDraft ? currentDraft(activeDraft) : null;
+          const activeEdit = currentDraft(lead.leadId, activeSequence, activeDraft);
 
           return (
             <div key={lead.leadId} className={card}>
@@ -246,105 +267,64 @@ export function SendingCampaignView({
                     />
                   </div>
 
-                  {isDraftStatus && (
-                    <div className="space-y-1.5 rounded-xl border border-[var(--border)] p-3">
-                      <label className="text-xs font-medium uppercase tracking-wide text-[var(--ink-soft)]">
-                        {lead.drafts.length > 0 ? "Rewrite (cold email + both follow-ups)" : "Write emails for just this lead"}
-                      </label>
-                      <p className="text-xs text-[var(--ink-soft)]">
-                        {lead.drafts.length > 0
-                          ? "Regenerates all 3 emails using your Settings email instructions and this lead's business summary, plus any feedback you add below."
-                          : "Drafts all 3 emails using your Settings email instructions and this lead's business summary."}
-                      </p>
-                      <textarea
-                        value={rewriteFeedback[lead.leadId] ?? ""}
-                        onChange={(e) =>
-                          setRewriteFeedback((prev) => ({ ...prev, [lead.leadId]: e.target.value }))
-                        }
-                        placeholder={`Optional feedback, e.g. "shorter", "don't mention automation", "more casual tone"…`}
-                        rows={2}
-                        className="w-full rounded-xl border border-[var(--border)] px-3.5 py-2.5 text-sm text-[var(--ink)] outline-none transition focus:border-[var(--brand)] focus:ring-2 focus:ring-[var(--brand-light)]"
-                      />
-                      <button
-                        type="button"
-                        onClick={() => handleRewrite(lead)}
-                        disabled={rewriting === lead.leadId}
-                        className={btnSecondary}
-                      >
-                        {rewriting === lead.leadId
-                          ? "Writing…"
-                          : lead.drafts.length > 0
-                            ? "Rewrite"
-                            : "Write"}
-                      </button>
-                      {rewriteMessage[lead.leadId] && (
-                        <p className="text-sm text-[var(--ink-soft)]">{rewriteMessage[lead.leadId]}</p>
-                      )}
-                    </div>
-                  )}
-
-                  {lead.drafts.length === 0 ? (
-                    <p className="text-sm text-[var(--ink-soft)]">
-                      No emails drafted yet for this lead.
-                    </p>
-                  ) : (
-                    <>
-                      <div className="flex gap-2">
-                        {lead.drafts.map((d) => (
+                  {visibleSequences.length > 1 && (
+                    <div className="flex gap-2">
+                      {visibleSequences.map((seq) => {
+                        const hasContent = lead.drafts.some((d) => d.sequence === seq);
+                        return (
                           <button
-                            key={d.id}
+                            key={seq}
                             type="button"
-                            onClick={() => setOpenSequence((prev) => ({ ...prev, [lead.leadId]: d.sequence }))}
+                            onClick={() => setOpenSequence((prev) => ({ ...prev, [lead.leadId]: seq }))}
                             className={`rounded-full px-4 py-1.5 text-sm font-medium transition ${
-                              activeSequence === d.sequence
+                              activeSequence === seq
                                 ? "bg-[var(--brand)] text-white"
                                 : "border border-[var(--border)] text-[var(--ink-soft)] hover:bg-neutral-50"
                             }`}
                           >
-                            {SEQUENCE_LABEL[d.sequence] ?? `Sequence ${d.sequence}`}
+                            {SEQUENCE_LABEL[seq] ?? `Sequence ${seq}`}
+                            {!hasContent && " (empty)"}
                           </button>
-                        ))}
-                      </div>
+                        );
+                      })}
+                    </div>
+                  )}
 
-                      {activeDraft && activeEdit && (
-                    <>
-                      <div className="space-y-1.5">
-                        <label className="text-xs font-medium uppercase tracking-wide text-[var(--ink-soft)]">
-                          Subject
-                        </label>
-                        <input
-                          value={activeEdit.subject}
-                          disabled={!isDraftStatus}
-                          onChange={(e) =>
-                            setDraftEdits((prev) => ({
-                              ...prev,
-                              [activeDraft.id]: { ...activeEdit, subject: e.target.value },
-                            }))
-                          }
-                          className="w-full rounded-xl border border-[var(--border)] px-3.5 py-2.5 text-sm text-[var(--ink)] outline-none transition focus:border-[var(--brand)] focus:ring-2 focus:ring-[var(--brand-light)] disabled:bg-neutral-50"
-                        />
-                      </div>
-                      <div className="space-y-1.5">
-                        <label className="text-xs font-medium uppercase tracking-wide text-[var(--ink-soft)]">
-                          Body
-                        </label>
-                        <textarea
-                          value={activeEdit.body}
-                          disabled={!isDraftStatus}
-                          onChange={(e) =>
-                            setDraftEdits((prev) => ({
-                              ...prev,
-                              [activeDraft.id]: { ...activeEdit, body: e.target.value },
-                            }))
-                          }
-                          rows={8}
-                          className="w-full rounded-xl border border-[var(--border)] px-3.5 py-2.5 font-mono text-sm text-[var(--ink)] outline-none transition focus:border-[var(--brand)] focus:ring-2 focus:ring-[var(--brand-light)] disabled:bg-neutral-50"
-                        />
-                      </div>
-                    </>
-                  )}
-                    </>
-                  )}
+                  <div className="space-y-1.5">
+                    <label className="text-xs font-medium uppercase tracking-wide text-[var(--ink-soft)]">
+                      Subject
+                    </label>
+                    <input
+                      value={activeEdit.subject}
+                      disabled={!isDraftStatus}
+                      placeholder="Write the subject line…"
+                      onChange={(e) =>
+                        setDraftEdits((prev) => ({
+                          ...prev,
+                          [draftKey(lead.leadId, activeSequence)]: { ...activeEdit, subject: e.target.value },
+                        }))
+                      }
+                      className="w-full rounded-xl border border-[var(--border)] px-3.5 py-2.5 text-sm text-[var(--ink)] outline-none transition focus:border-[var(--brand)] focus:ring-2 focus:ring-[var(--brand-light)] disabled:bg-neutral-50"
+                    />
+                  </div>
+                  <div className="space-y-1.5">
+                    <label className="text-xs font-medium uppercase tracking-wide text-[var(--ink-soft)]">
+                      Body
+                    </label>
+                    <textarea
+                      value={activeEdit.body}
+                      disabled={!isDraftStatus}
+                      placeholder="Write the email body…"
+                      onChange={(e) =>
+                        setDraftEdits((prev) => ({
+                          ...prev,
+                          [draftKey(lead.leadId, activeSequence)]: { ...activeEdit, body: e.target.value },
+                        }))
+                      }
+                      rows={8}
+                      className="w-full rounded-xl border border-[var(--border)] px-3.5 py-2.5 font-mono text-sm text-[var(--ink)] outline-none transition focus:border-[var(--brand)] focus:ring-2 focus:ring-[var(--brand-light)] disabled:bg-neutral-50"
+                    />
+                  </div>
 
                   {isDraftStatus && (
                     <div className="flex items-center gap-2">
