@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { GmailAccountsTab } from "@/components/GmailAccountsTab";
 import { ApifyAccountsTab } from "@/components/ApifyAccountsTab";
+import { NoWebsiteLeadsSyncButton } from "@/components/NoWebsiteLeadsSyncButton";
 import { btnPrimary, card, input as inputClass } from "@/lib/ui";
 
 interface SettingsState {
@@ -264,6 +265,7 @@ export function SettingsForm() {
               value={state.googleSheetId}
               onChange={(v) => update("googleSheetId", v)}
             />
+            <NoWebsiteLeadsSyncButton />
           </>
         )}
 

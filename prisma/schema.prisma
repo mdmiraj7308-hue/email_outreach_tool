@@ -153,6 +153,13 @@ model NoWebsiteLead {
   googleMapsUrl String   @default("null")
   createdAt     DateTime @default(now())
 
+  // The insert-time push to the "No Website Leads" sheet tab is
+  // best-effort (never throws, so a bad Sheets connection doesn't fail the
+  // scrape) — this tracks whether it actually landed, so a real re-sync
+  // action can pick up whatever was missed instead of it being silently
+  // lost forever.
+  sheetSynced Boolean @default(false)
+
   @@unique([googlePlaceId])
   @@index([campaignRunId])
 }

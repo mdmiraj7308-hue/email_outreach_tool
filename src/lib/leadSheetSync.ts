@@ -1,6 +1,6 @@
 import { prisma } from "@/lib/prisma";
 import { getSettings } from "@/lib/settings";
-import { appendLeadRows, updateLeadRow, type SheetLeadRow } from "@/lib/sheets";
+import { appendLeadRows, appendNoWebsiteLeadRows, updateLeadRow, type SheetLeadRow } from "@/lib/sheets";
 import { format } from "date-fns";
 import type { Lead, EmailDraft } from "@/generated/prisma/client";
 
@@ -121,4 +121,56 @@ export async function syncCampaignRunToSheet(campaignRunId: string): Promise<Cam
   }
 
   return { total: leads.length, succeeded, failed, firstError };
+}
+
+export interface NoWebsiteSyncResult {
+  total: number;
+  synced: number;
+  error?: string;
+}
+
+/**
+ * Re-syncs every NoWebsiteLead not yet marked sheetSynced — catches
+ * whatever the best-effort insert-time push (in scrapeRun.ts) missed, e.g.
+ * a Sheets auth/permission failure at scrape time. Safe to call repeatedly:
+ * only unsynced rows are selected, and nothing gets marked synced unless
+ * the append actually succeeded.
+ */
+export async function syncPendingNoWebsiteLeads(): Promise<NoWebsiteSyncResult> {
+  const pending = await prisma.noWebsiteLead.findMany({
+    where: { sheetSynced: false },
+    orderBy: { createdAt: "asc" },
+  });
+  if (pending.length === 0) return { total: 0, synced: 0 };
+
+  const settings = await getSettings();
+  if (!settings.googleServiceAccountJson || !settings.googleSheetId) {
+    return { total: pending.length, synced: 0, error: "Google Sheets is not configured in Settings." };
+  }
+
+  try {
+    await appendNoWebsiteLeadRows(
+      settings.googleServiceAccountJson,
+      settings.googleSheetId,
+      pending.map((r) => ({
+        date: format(r.createdAt, "yyyy-MM-dd"),
+        businessName: r.businessName,
+        phone: r.phone,
+        address: r.address,
+        category: r.category,
+        googleMapsUrl: r.googleMapsUrl,
+      }))
+    );
+  } catch (err) {
+    const message = err instanceof Error ? err.message : "Unknown Google Sheets API error";
+    console.error("[sheets] failed to sync pending no-website leads", err);
+    return { total: pending.length, synced: 0, error: message };
+  }
+
+  await prisma.noWebsiteLead.updateMany({
+    where: { id: { in: pending.map((r) => r.id) } },
+    data: { sheetSynced: true },
+  });
+
+  return { total: pending.length, synced: pending.length };
 }

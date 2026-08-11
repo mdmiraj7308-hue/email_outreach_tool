@@ -1,8 +1,7 @@
 import { prisma } from "@/lib/prisma";
 import { getSettings } from "@/lib/settings";
 import { fetchScrapedLeads, getRunStatus, startGoogleMapsScrape } from "@/lib/apify";
-import { syncLeadToSheet } from "@/lib/leadSheetSync";
-import { appendNoWebsiteLeadRows } from "@/lib/sheets";
+import { syncLeadToSheet, syncPendingNoWebsiteLeads } from "@/lib/leadSheetSync";
 import { nullify } from "@/lib/nullify";
 import { geocodeBoundingBox } from "@/lib/geocoding";
 import { pickGridDimensions, splitIntoTiles, subdivideTile, tileToGeoJsonPolygon, type GridTile } from "@/lib/geoGrid";
@@ -467,7 +466,12 @@ async function insertLeadsFromDataset(
         })
       : [];
   if (noWebsiteRecords.length > 0) {
-    await pushNoWebsiteLeadsToSheet(noWebsiteRecords);
+    // Best-effort — never throws, so a bad Sheets connection can't fail the
+    // scrape itself. Unsynced rows stay sheetSynced: false and get picked
+    // up later by the "Sync No-Website Leads" action in Settings.
+    await syncPendingNoWebsiteLeads().catch((err) =>
+      console.error("[scrape] failed to sync no-website leads to sheet", err)
+    );
   }
 
   // Counted from what was actually written to the DB (leads.length +
@@ -480,30 +484,6 @@ async function insertLeadsFromDataset(
   // overcount, by construction.
   const newRecordsCount = leads.length + noWebsiteRecords.length;
   return { duplicatesSkipped: places.length - newRecordsCount, rawCount: places.length, newRecordsCount };
-}
-
-async function pushNoWebsiteLeadsToSheet(
-  records: { businessName: string; phone: string; address: string; category: string; googleMapsUrl: string; createdAt: Date }[]
-): Promise<void> {
-  const settings = await getSettings();
-  if (!settings.googleServiceAccountJson || !settings.googleSheetId) return;
-
-  try {
-    await appendNoWebsiteLeadRows(
-      settings.googleServiceAccountJson,
-      settings.googleSheetId,
-      records.map((r) => ({
-        date: format(r.createdAt, "yyyy-MM-dd"),
-        businessName: r.businessName,
-        phone: r.phone,
-        address: r.address,
-        category: r.category,
-        googleMapsUrl: r.googleMapsUrl,
-      }))
-    );
-  } catch (err) {
-    console.error("[scrape] failed to push no-website leads to sheet", err);
-  }
 }
 
 function parseState(raw: string | null): ScrapeState | null {
